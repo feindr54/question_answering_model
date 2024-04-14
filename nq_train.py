@@ -66,7 +66,7 @@ def train(model, optimizer, criterion):
         question_mask = batch['question_mask'].to(device)
         answers = batch['long_answers'].to(device)
         answer_mask = batch['answer_mask'].to(device)
-        labels = batch['labels'].to(device)
+        labels = batch['labels'].to(device).float()
         optimizer.zero_grad()
         # run Bert on both
         y = model(questions, answers, question_mask, answer_mask)
@@ -74,7 +74,7 @@ def train(model, optimizer, criterion):
         loss.backward()
         optimizer.step()
         epoch_loss += loss.item()
-        data_num += labels.questions[0]
+        data_num += len(labels)
         print('step :', i, ', loss :', loss.item())
     return epoch_loss / data_num
 
@@ -90,13 +90,13 @@ def evaluate(model, criterion):
             question_mask = batch['question_mask'].to(device)
             answers = batch['long_answers'].to(device)
             answer_mask = batch['answer_mask'].to(device)
-            labels = batch['labels'].to(device)
+            labels = batch['labels'].to(device).float()
             # run the model on the question and answers
             y = model(questions, answers, question_mask, answer_mask)
             loss = criterion(y, labels)
 
             epoch_loss += loss.item()
-            data_num += questions.shape[0]
+            data_num += len(labels)
     return epoch_loss / data_num
 
 def run(total_epoch, best_loss):
