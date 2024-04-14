@@ -10,16 +10,16 @@ from conf import *
 from util.epoch_timer import epoch_time
 from data.dataloader_nq import ModelDataLoader as Dataloader
 
-class CrossAttentionLayer(nn.Module):
-    def __init__(self, device):
-        super(CrossAttentionLayer, self).__init__()
-        self.device = device
-    def forward(self, query, key, value):
-        query = query.to(device) # batch * a * 768
-        key = key.to(device) # batch * q * 768
-        out = torch.softmax(torch.bmm(query, key.T), dim=1) # batch * a * q
-        out = torch.bmm(out, value) # must multiply by batch * q * encoding_length
-        return out
+# class CrossAttentionLayer(nn.Module):
+#     def __init__(self, device):
+#         super(CrossAttentionLayer, self).__init__()
+#         self.device = device
+#     def forward(self, query, key, value):
+#         query = query.to(device) # batch * a * 768
+#         key = key.to(device) # batch * q * 768
+#         out = torch.softmax(torch.bmm(query, key.T), dim=1) # batch * a * q
+#         out = torch.bmm(out, value) # must multiply by batch * q * encoding_length
+#         return out
 
 class QAModel(nn.Module):
     def __init__(self, device):
@@ -27,25 +27,34 @@ class QAModel(nn.Module):
         self.qbert = BertModel.from_pretrained("google-bert/bert-base-uncased").to(device)
         self.abert = BertModel.from_pretrained("google-bert/bert-base-uncased").to(device)
 
-        self.cx_attention = [CrossAttentionLayer(device) for _ in range(6)]
-        self.linear = nn.Linear(512,1, device=device) # input is batch * answers * 768
-        self.sigmoid = nn.Sigmoid
+        # self.cx_attention = [CrossAttentionLayer(device) for _ in range(6)]
+        self.cx_attention = [nn.MultiheadAttention(768, 2, batch_first=True, device=device) for _ in range(6)] # output remains query size, ie abatch x seqlen x 768
+        self.linear = nn.Linear(768,1, device=device) # input is batch * answers * 768
 
-        self.sim = nn.CosineSimilarity()
         self.device = device
     def forward(self, question, answer, question_mask, answer_mask):
-        # obtain bert embeddings of question and answer
-        # TODO - pass the attention mask
-        q_embeds = self.qbert(question, question_mask).pooler_output.to(self.device) # batch x 768
-        a_embeds = self.abert(answer, answer_mask).pooler_output.to(self.device) # batch x 768
-        value = q_embeds
-        # calculate and return the argmax of dot product similarity
-        # TODO - replace cosine similarity with a cross attention model
+        # obtain bert embeddings of question and answer with attention mask
+        # get the pooled output for the questions, and the unpooled output from the answers
+        q_embeds = self.qbert(question, question_mask).pooler_output.to(self.device) # (abatch) * qbatch x 768
+        a_embeds = self.abert(answer, answer_mask).last_hidden_state.to(self.device) # abatch x seqlen x 768
+        # q_embeds = q_embeds.unsqueeze(0)
+        q_embeds = q_embeds.repeat(a_embeds.shape[0],1,1)
+
+        print(f"q_embed shape:{q_embeds.shape}")
+        print(f"a_embed shape:{a_embeds.shape}")
+
+        query = q_embeds
+        key = a_embeds
+        value = a_embeds
+        # run query through cross attention
         for cx_layer in self.cx_attention:
-            value = cx_layer(a_embeds, q_embeds, value)
-        # output = self.sim(q_embeds, a_embeds)
-        # linear layer
-        output = self.sigmoid(self.linear(value))
+            query = cx_layer(query, key, value)[0] # 0th index is attn output, 1st index is attention weights
+
+        # TODO - linear layer
+        print(f"cx_attention output shape:{query.shape}")
+        output = self.linear(query)
+        print(f'output_shape:{output.shape}')
+        # output = self.sigmoid(self.linear(value))
         return output
 
 model = QAModel(device)
@@ -53,7 +62,7 @@ model = QAModel(device)
 train_dataloader = Dataloader(batch_size=batch_size, mode="train")
 val_dataloader = Dataloader(batch_size=batch_size, mode="valid")
 
-optimizer = Adam(params=model.parameters(),
+optimizer = nn.Adam(params=model.parameters(),
                  lr=init_lr,
                  weight_decay=weight_decay,
                  eps=adam_eps)
@@ -62,7 +71,7 @@ scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer=optimizer,
                                                  verbose=True,
                                                  factor=factor,
                                                  patience=patience)
-criterion = nn.BCELoss()
+criterion = nn.BCEWithLogitsLoss()
 
 def train(model, optimizer, criterion):
     # set model to training mode
