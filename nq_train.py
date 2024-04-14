@@ -10,24 +10,12 @@ from conf import *
 from util.epoch_timer import epoch_time
 from data.dataloader_nq import ModelDataLoader as Dataloader
 
-# class CrossAttentionLayer(nn.Module):
-#     def __init__(self, device):
-#         super(CrossAttentionLayer, self).__init__()
-#         self.device = device
-#     def forward(self, query, key, value):
-#         query = query.to(device) # batch * a * 768
-#         key = key.to(device) # batch * q * 768
-#         out = torch.softmax(torch.bmm(query, key.T), dim=1) # batch * a * q
-#         out = torch.bmm(out, value) # must multiply by batch * q * encoding_length
-#         return out
-
 class QAModel(nn.Module):
     def __init__(self, device):
         super(QAModel, self).__init__()
         self.qbert = BertModel.from_pretrained("google-bert/bert-base-uncased").to(device)
         self.abert = BertModel.from_pretrained("google-bert/bert-base-uncased").to(device)
 
-        # self.cx_attention = [CrossAttentionLayer(device) for _ in range(6)]
         self.cx_attention = [nn.MultiheadAttention(768, 2, batch_first=True, device=device) for _ in range(6)] # output remains query size, ie abatch x seqlen x 768
         self.linear = nn.Linear(768,1, device=device) # input is batch * answers * 768
 
@@ -37,11 +25,9 @@ class QAModel(nn.Module):
         # get the pooled output for the questions, and the unpooled output from the answers
         q_embeds = self.qbert(question, question_mask).pooler_output.to(self.device) # (abatch) * qbatch x 768
         a_embeds = self.abert(answer, answer_mask).last_hidden_state.to(self.device) # abatch x seqlen x 768
-        # q_embeds = q_embeds.unsqueeze(0)
-        q_embeds = q_embeds.repeat(a_embeds.shape[0],1,1)
 
-        print(f"q_embed shape:{q_embeds.shape}")
-        print(f"a_embed shape:{a_embeds.shape}")
+        # extend the dimensions of the questions to the answer batch
+        q_embeds = q_embeds.repeat(a_embeds.shape[0],1,1)
 
         query = q_embeds
         key = a_embeds
@@ -50,17 +36,14 @@ class QAModel(nn.Module):
         for cx_layer in self.cx_attention:
             query = cx_layer(query, key, value)[0] # 0th index is attn output, 1st index is attention weights
 
-        # TODO - linear layer
-        print(f"cx_attention output shape:{query.shape}")
+        # Linear layer
         output = self.linear(query)
-        print(f'output_shape:{output.shape}')
-        # output = self.sigmoid(self.linear(value))
-        return output
+        return output.squeeze(-1)
 
 model = QAModel(device)
 
 train_dataloader = Dataloader(batch_size=batch_size, mode="train")
-val_dataloader = Dataloader(batch_size=batch_size, mode="valid")
+
 
 optimizer = nn.Adam(params=model.parameters(),
                  lr=init_lr,
@@ -99,6 +82,7 @@ def evaluate(model, criterion):
     model.eval()
     epoch_loss = 0
     data_num = 0
+    val_dataloader = Dataloader(batch_size=batch_size, mode="valid")
     with torch.no_grad():
         for i, batch in enumerate(val_dataloader):
             # obtain the embedding for the question and answers
