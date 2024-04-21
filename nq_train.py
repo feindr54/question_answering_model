@@ -18,6 +18,11 @@ class QAModel(nn.Module):
         self.abert = BertModel.from_pretrained("google-bert/bert-base-uncased").to(device)
 
         self.cx_attention = [nn.MultiheadAttention(768, 2, batch_first=True, device=device) for _ in range(6)] # output remains query size, ie abatch x seqlen x 768
+        self.cx_attention = [] # output remains query size, ie abatch x seqlen x 768
+        for _ in range(6):
+            self.cx_attention.append(nn.MultiheadAttention(768, 2, batch_first=True, device=device))
+            self.cx_attention.append(nn.Linear(in_features=768, out_features=768))
+            self.cx_attention.append(nn.ReLU())
         self.linear = nn.Linear(768,1, device=device) # input is batch * answers * 768
 
         self.device = device
@@ -34,9 +39,11 @@ class QAModel(nn.Module):
         key = a_embeds
         value = a_embeds
         # run query through cross attention
-        for cx_layer in self.cx_attention:
-            query = cx_layer(query, key, value)[0] # 0th index is attn output, 1st index is attention weights
-
+        for i in range(6):
+            # cross attention layer
+            query = self.cx_attention[i](query, key, value)[0] # 0th index is attn output, 1st index is attention weights
+            # feedforward layer
+            query = self.cx_attention[i+2](self.cx_attention[i+1](query))
         # Linear layer
         output = self.linear(query)
         return output.squeeze(-1)
