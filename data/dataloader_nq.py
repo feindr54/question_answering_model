@@ -14,6 +14,74 @@ def get_dataset():
   validation = data['validation']
   return train, validation
 
+class DecoderDataLoader(DataLoader):
+    def __init__(self, batch_size, mode="train"):
+        train, validation = get_dataset()
+        if mode == "train":
+            data = train
+            self.is_train = True
+        elif mode == "valid":
+            data = validation
+            self.is_train = False
+        else:
+            raise ValueError(f"mode should be selected from train/valid, but got {mode}.")
+
+        super(ModelDataLoader, self).__init__(data, batch_size=batch_size, shuffle=False, drop_last=True, collate_fn=self.collate_fn)
+
+    def collate_fn(self, batch):
+        # create a prompt based on the correct answer
+        prompts = []
+        valid_prompts = []
+        for row in batch:
+            # get the question from the row
+            question = row["question"]["text"]
+            # add questions to a list of questions
+            # questions.append(question)
+
+            # attach the short answers together
+            annotations = row["annotations"]["short_answers"] # list of short answers
+            s_a_prompt: str = ""
+            for short_answer in annotations:
+                s_a_prompt += short_answer["text"] + ","
+            s_a_prompt = s_a_prompt[:-1]
+
+            #obtain a long answer candidate
+            doc = row['document']
+            long_answer = row["annotations"]["long_answer"][0]
+            correct_index = long_answer["candidate_index"]
+            candidates = row['long_answer_candidates']
+
+            def get_string_tokens(index, candidates, doc):
+              start_token = candidates["start_token"][index]
+              end_token = candidates["end_token"][index]
+
+              # remove the html tags (irrelevant text)
+              # can consider keeping the html
+              is_not_html = np.invert(np.array(doc["tokens"]["is_html"]))[start_token:end_token]
+              tokens = np.array(doc["tokens"]["token"])[start_token:end_token]
+              string_tokens = " ".join(list(tokens[is_not_html]))
+
+              return string_tokens
+            l_a_prompt:str = get_string_tokens(correct_index, candidates, doc)
+
+            # generates the prompt; if training set, append actual short answer to the end
+            prompt = "Question: " + question + " Answers: " + l_a_prompt + ". Short answer: "
+            valid_prompts.append(prompt)
+            if (self.is_train):
+                prompt += s_a_prompt
+            prompts.append(prompt)
+        # convert the list of prompts into a list of input ids, and corresponding labels
+        # encode all the strings, with padding, and get the required attention mask for each
+        train_prompt_tokens = self.tokenizer(prompts, padding=True, max_length=256, truncation=True, return_tensors="pt")
+        input_ids = train_prompt_tokens["input_ids"]
+        valid_prompt_tokens = self.tokenizer(valid_prompts, padding=True, max_length=256, truncation=True, return_tensors="pt")
+        # perform bit-wise and on both attention masks for the final mask
+        attention_mask = train_prompt_tokens["attention_mask"] * valid_prompt_tokens["attention_mask"]
+        # generate the labels from the new mask
+        labels = train_prompt_tokens * attention_mask # all entries all either original token values or 0
+        # convert the 0s to -100
+        labels = torch.where(input_ids > 0, input_ids, -100)
+        return {"input_ids": input_ids, "attention_mask": train_prompt_tokens["attention_mask"], "labels": labels}
 
 class ModelDataLoader(DataLoader):
     def __init__(self, batch_size, mode="train"):
@@ -113,7 +181,7 @@ class ModelDataLoader(DataLoader):
         answers = torch.LongTensor(answers["input_ids"])
 
         # create a label 2d tensor from a list of tensors
-        labels = torch.stack(labels, dim=0)
+        labels = torch.stack(labels, dim=0) # answer x question, 0, 3, 6,
 
         # add attention masks for the questions and the answers
         return {"questions": questions, "question_mask": question_mask, "long_answers": answers, "answer_mask": answer_mask, "labels": labels}
