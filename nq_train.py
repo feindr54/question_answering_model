@@ -3,12 +3,13 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.optim import Adam
 import numpy as np
-from transformers import BertModel
+from transformers import BertModel, GPT2LMHeadModel
 import time
 
 from conf import *
 from util.epoch_timer import epoch_time
 from data.dataloader_nq import ModelDataLoader as Dataloader
+from data.dataloader_nq import DecoderDataLoader
 
 class QAModel(nn.Module):
     def __init__(self, device):
@@ -55,6 +56,64 @@ scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer=optimizer,
                                                  factor=factor,
                                                  patience=patience)
 criterion = nn.BCEWithLogitsLoss()
+
+def decoder_train(pptimizer):
+    epoch_loss = 0
+    data_num = 0
+
+    model = GPT2LMHeadModel.from_pretrained("openai-community/gpt2")
+    model.train()
+    dataloader = DecoderDataLoader(device)
+    for i, batch in enumerate(dataloader):
+        input_ids = batch["input_ids"].to(device)
+        mask = batch["mask"].to(device)
+        labels = batch["labels"].to(device)
+        optimizer.zero_grad()
+
+        # run the decoder on the input
+        loss = model(input_ids, mask, labels=labels)
+        loss.backward()
+        optimizer.step()
+
+        # update total loss
+        epoch_loss += loss.item()
+        data_num += len(labels)
+    return epoch_loss / data_num
+
+def decoder_run(total_epoch, best_loss):
+    import math
+    train_losses, test_losses = [], []
+    for step in range(total_epoch):
+        # train and evaluate model
+        start_time = time.time()
+        train_loss = decoder_train(optimizer, criterion)
+        # valid_loss = evaluate(model, criterion)
+        end_time = time.time()
+
+        train_losses.append(train_loss)
+        # test_losses.append(valid_loss)
+
+        # time the process
+        epoch_mins, epoch_secs = epoch_time(start_time, end_time)
+
+        # saves the model with the best loss
+        # if valid_loss < best_loss:
+        #     best_loss = valid_loss
+        #     torch.save(model.state_dict(), 'saved/model-{0}.pt'.format(valid_loss))
+        if train_loss < best_loss:
+            best_loss = train_loss
+            torch.save(model.state_dict(), 'saved/model-{0}.pt'.format(train_loss))
+
+        f = open('result/train_loss.txt', 'w')
+        f.write(str(train_losses))
+        f.close()
+
+        # f = open('result/test_loss.txt', 'w')
+        # f.write(str(test_losses))
+        # f.close()
+
+        print(f'Epoch: {step + 1} | Time: {epoch_mins}m {epoch_secs}s')
+        print(f'\tTrain Loss: {train_loss:.3f} | Train PPL: {math.exp(train_loss):7.3f}')
 
 def train(model, optimizer, criterion):
     # set model to training mode
