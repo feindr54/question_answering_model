@@ -39,6 +39,7 @@ class DecoderDataLoader(DataLoader):
             # questions.append(question)
 
             # attach the short answers together
+            # TODO - if no short answers, just mask everything, and only train the long answer
             annotations = row["annotations"]["short_answers"] # list of short answers
             s_a_prompt: str = ""
             for short_answer in annotations:
@@ -65,11 +66,15 @@ class DecoderDataLoader(DataLoader):
             l_a_prompt:str = get_string_tokens(correct_index, candidates, doc)
 
             # generates the prompt; if training set, append actual short answer to the end
-            prompt = "Question: " + question + " Answers: " + l_a_prompt + ". Short answer: "
+            prompt = "Question: " + question + " Answers: " + l_a_prompt + ". Short answer: " # + tokenier_pad_token + short answer + right paddings
             valid_prompts.append(prompt)
             if (self.is_train):
                 prompt += s_a_prompt
             prompts.append(prompt)
+        # TODO - use a special token to separate the question and answer
+            # set tokenizer.pad_token
+            #
+
         # convert the list of prompts into a list of input ids, and corresponding labels
         # encode all the strings, with padding, and get the required attention mask for each
         train_prompt_tokens = self.tokenizer(prompts, padding=True, max_length=256, truncation=True, return_tensors="pt")
@@ -81,6 +86,7 @@ class DecoderDataLoader(DataLoader):
         labels = train_prompt_tokens * attention_mask # all entries all either original token values or 0
         # convert the 0s to -100
         labels = torch.where(input_ids > 0, input_ids, -100)
+        # TODO - need the question, candidate long answers, labels, prompt for short answer generation (end2end tokenized prompt), attention mask, short answer labels
         return {"input_ids": input_ids, "attention_mask": train_prompt_tokens["attention_mask"], "labels": labels}
 
 class ModelDataLoader(DataLoader):
@@ -181,13 +187,13 @@ class ModelDataLoader(DataLoader):
         answers = torch.LongTensor(answers["input_ids"])
 
         # create a label 2d tensor from a list of tensors
-        labels = torch.stack(labels, dim=0) # answer x question, 0, 3, 6,
+        labels = torch.stack(labels, dim=0)
 
         # add attention masks for the questions and the answers
         return {"questions": questions, "question_mask": question_mask, "long_answers": answers, "answer_mask": answer_mask, "labels": labels}
 
 if __name__=="__main__":
-    nq_dataloader = ModelDataLoader(batch_size=16)
+    nq_dataloader = ModelDataLoader(batch_size=2)
     for batch in nq_dataloader:
         print(batch["questions"].shape)
         print(batch["long_answers"].shape)
