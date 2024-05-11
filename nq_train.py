@@ -7,9 +7,15 @@ from transformers import BertModel, GPT2LMHeadModel, AutoTokenizer
 import time
 
 from conf import *
-from util.epoch_timer import epoch_time
 from data.dataloader_nq import ModelDataLoader as Dataloader
 from data.dataloader_nq import DecoderDataLoader
+
+
+def epoch_time(start_time, end_time):
+    elapsed_time = end_time - start_time
+    elapsed_mins = int(elapsed_time / 60)
+    elapsed_secs = int(elapsed_time - (elapsed_mins * 60))
+    return elapsed_mins, elapsed_secs
 
 """
 Args
