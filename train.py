@@ -29,6 +29,10 @@ class QAShortAnswer(nn.Module):
     def __init__(self, device):
         super(QAShortAnswer, self).__init__(device=device)
         self.decoder = GPT2LMHeadModel.from_pretrained("openai-community/gpt2")
+
+        # need a long answer bank, with the appropriate embeddings
+        # TODO - load a long answer bank (pre-trained long answer retriever)
+
     def forward(self, tokens):
         # TODO - design a prompt for the decoder
         question = ...
@@ -51,12 +55,12 @@ class QAModel(nn.Module):
         self.cx_attention = [] # output remains query size, ie abatch x seqlen x 768
         for _ in range(6):
             self.cx_attention.append(nn.MultiheadAttention(768, 2, batch_first=True, device=device))
-            self.cx_attention.append(nn.Linear(in_features=768, out_features=768))
+            self.cx_attention.append(nn.Linear(in_features=768, out_features=768, device=device))
             self.cx_attention.append(nn.ReLU())
         # add some feedforward and ReLU (input output same shape) between cross attention
         self.linear = nn.Linear(768,1, device=device) # input is batch * answers * 768
-
         self.device = device
+
     def forward(self, question, answer, question_mask, answer_mask):
         # obtain bert embeddings of question and answer with attention mask
         # get the pooled output for the questions, and the unpooled output from the answers
@@ -75,9 +79,9 @@ class QAModel(nn.Module):
         # run query through cross attention
         for i in range(6):
             # cross attention layer
-            query = self.cx_attention[i](query, key, value)[0] # 0th index is attn output, 1st index is attention weights
+            query = self.cx_attention[i*3](query, key, value)[0] # 0th index is attn output, 1st index is attention weights
             # feedforward layer
-            query = self.cx_attention[i+2](self.cx_attention[i+1](query))
+            query = self.cx_attention[i*3+2](self.cx_attention[i*3+1](query))
 
 
         # TODO - linear layer
@@ -100,7 +104,7 @@ scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer=optimizer,
                                                  patience=patience)
 criterion = nn.BCEWithLogitsLoss()
 
-def decoder_train(pptimizer):
+def decoder_train(optimizer):
     epoch_loss = 0
     data_num = 0
 
@@ -134,7 +138,7 @@ def train(model, optimizer, criterion):
         question_mask = batch['question_mask'].to(device)
         answers = batch['long_answers'].to(device)
         answer_mask = batch['answer_mask'].to(device)
-        labels = batch['labels'].to(device).float()
+        labels = batch['labels'].float().to(device)
         optimizer.zero_grad()
         # run Bert on both
         y = model(questions, answers, question_mask, answer_mask)

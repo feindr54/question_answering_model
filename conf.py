@@ -4,7 +4,7 @@ import torch
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 # model parameter setting
-batch_size = 32
+batch_size = 8
 max_len = 64
 d_model = 512
 n_layers = 6
@@ -18,7 +18,7 @@ factor = 0.9
 adam_eps = 5e-9
 patience = 10
 warmup = 100
-epoch = 1000
+epoch = 400
 clip = 1.0
 weight_decay = 5e-4
 inf = float('inf')
