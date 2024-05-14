@@ -103,8 +103,7 @@ class ModelDataLoader(DataLoader):
         self.tokenizer = AutoTokenizer.from_pretrained("google-bert/bert-base-uncased")
         self.pad_idx = 0
 
-
-        # TODO: sort by the questions/answers
+        # TODO: sort by the short answers
 
         # want: question(tokenized); candidate long answer (tokenized); true or false entries
         # for each question, get the correct answer, and get 3 irrelevant answer
@@ -190,6 +189,8 @@ class ModelDataLoader(DataLoader):
         labels = torch.stack(labels, dim=0)
 
         # add attention masks for the questions and the answers
+        # TODO - add short answer, and short answer mask
+        # don't need wrong short answer since it is a generation task
         return {"questions": questions, "question_mask": question_mask, "long_answers": answers, "answer_mask": answer_mask, "labels": labels}
 
 if __name__=="__main__":

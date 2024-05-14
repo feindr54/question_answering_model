@@ -10,7 +10,6 @@ from conf import *
 from data.dataloader_nq import ModelDataLoader as Dataloader
 from data.dataloader_nq import DecoderDataLoader
 
-
 def epoch_time(start_time, end_time):
     elapsed_time = end_time - start_time
     elapsed_mins = int(elapsed_time / 60)
@@ -38,7 +37,7 @@ class QAShortAnswer(nn.Module):
         question = ...
         # TODO - create a template for documents
         documents = ...
-        predict_prompt = question + "[PAD]" + documents + "[PAD]" + "Short Answer: "
+        predict_prompt = "Question: " + question + "Long answer: " + documents + "Long answer embeddings: " + ... + "Short Answer: "
 
         # pass the tokens into the decoder
         # if training, then just call the forward function and generate a loss
