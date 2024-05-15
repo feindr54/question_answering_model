@@ -101,6 +101,7 @@ class ModelDataLoader(DataLoader):
             raise ValueError(f"mode should be selected from train/valid, but got {mode}.")
 
         self.tokenizer = AutoTokenizer.from_pretrained("google-bert/bert-base-uncased")
+        self.tokenizer.add_special_tokens({'additional_special_tokens': ['[LA_SEP]']})
         self.pad_idx = 0
 
         # TODO: sort by the short answers
@@ -126,6 +127,9 @@ class ModelDataLoader(DataLoader):
         answers = []
         labels = []
 
+        prompts = []
+        valid_prompts = []
+
         index = 0
         q_count = len(batch)
         for row in batch:
@@ -139,6 +143,9 @@ class ModelDataLoader(DataLoader):
             annotations = row["annotations"]["long_answer"][0]
             correct_index = annotations["candidate_index"]
             candidates = row['long_answer_candidates']
+
+            # TODO - generate a short answer mask to be trained on
+            # TODO - generate the label to train decoder on (-100 till the actual short answer)
 
             # get 2 random and wrong indices
             wrong1 = correct_index
@@ -159,19 +166,38 @@ class ModelDataLoader(DataLoader):
 
               return string_tokens
 
+            # obtain the correct long answers
+            correct_long_answer = get_string_tokens(correct_index, candidates, doc)
+
             # obtain the sentence embedding
-            answers.append(get_string_tokens(correct_index, candidates, doc))
-            answers.append(get_string_tokens(wrong1, candidates, doc))
-            answers.append(get_string_tokens(wrong2, candidates, doc))
+            answers.append(get_string_tokens(correct_index, candidates, doc)) # correct long answer
+            answers.append(get_string_tokens(wrong1, candidates, doc)) # incorrect long answer
+            answers.append(get_string_tokens(wrong2, candidates, doc)) # incorrect long answer
 
             # check if true or false
-            # tune the ratio during training
+            # TODO - tune the ratio during training
             zeros = torch.zeros(size=(q_count,), dtype=torch.long)
             zeros[index] += 1
             labels.append(zeros)
             labels.append(torch.zeros(size=(q_count, ), dtype=torch.long))
             labels.append(torch.zeros(size=(q_count, ), dtype=torch.long))
             index += 1
+
+            # attach the short answers together
+            # TODO - if no short answers, just mask everything, and only train the long answer
+            annotations = row["annotations"]["short_answers"] # list of short answers
+            s_a_prompt: str = ""
+            for short_answer in annotations:
+                s_a_prompt += short_answer["text"] + ","
+            s_a_prompt = s_a_prompt[:-1]
+
+            prompt = "Question: " + question + " [PAD]Answers: " + correct_long_answer + "[PAD][LA_SEP]" + "[PAD]Short answer: " # + tokenier_pad_token + short answer + right paddings
+            valid_prompts.append(prompt)
+            if (self.is_train):
+                prompt += s_a_prompt
+            prompts.append(prompt)
+
+            # TODO - convert the prompt to tokens
 
         # tokenize and add padding to the questions and answers
         questions = self.tokenizer(questions, padding=True, max_length=int(max_len/4), truncation=True, return_tensors="pt")
@@ -188,15 +214,165 @@ class ModelDataLoader(DataLoader):
         # create a label 2d tensor from a list of tensors
         labels = torch.stack(labels, dim=0)
 
+        # create tensor of prompts and answer masks, as well as labels
+        prompt_max_len = 1024
+        prompts = self.tokenizer(prompts, padding=True, max_length=prompt_max_len, truncation=True, return_tensors="pt", add_special_tokens=True)
+        prompt_mask = prompts["attention_mask"]
+        prompts = torch.LongTensor(questions['input_ids'])
+
+        # add attention masks for the questions and the answers
+        # TODO - create short answer labels (once I know the average length of prompt tokens)
+
+
+        # don't need wrong short answer since it is a generation task
+        return {"questions": questions, "question_mask": question_mask, "long_answers": answers, "long_answer_mask": answer_mask,
+                "long_answers_labels": labels, "prompts": prompts, "prompt_mask": prompt_mask, "short_answers_labels": ...}
+
+class TestDataLoader(DataLoader):
+    def __init__(self, batch_size, mode="train"):
+        # get the data
+        train, validation = get_dataset()
+        if mode == "train":
+            self.is_train = True
+            data = train
+        elif mode == "valid":
+            self.is_train = False
+            data = validation
+        else:
+            raise ValueError(f"mode should be selected from train/valid, but got {mode}.")
+
+        self.tokenizer = AutoTokenizer.from_pretrained("google-bert/bert-base-uncased")
+        self.tokenizer.add_special_tokens({'additional_special_tokens': ['[LA_SEP]']})
+        self.pad_idx = 0
+
+        # TODO: sort by the short answers
+
+        # want: question(tokenized); candidate long answer (tokenized); true or false entries
+        # for each question, get the correct answer, and get 3 irrelevant answer
+        super(TestDataLoader, self).__init__(data, batch_size=batch_size, shuffle=False, drop_last=True, collate_fn=self.collate_fn)
+    def collate_fn(self, batch):
+        questions = []
+
+        la_lens = []
+        prompt_lens = []
+
+        prompts = []
+        valid_prompts = []
+
+        index = 0
+        total_la_len = 0
+        total_prompt_len = 0
+        q_count = len(batch)
+        for row in batch:
+            # get the question from the row
+            question = row["question"]["text"]
+            # add questions to a list of questions
+            questions.append(question)
+
+            # get a correct answer and 2 wrong answers in the same batch
+            doc = row['document']
+            annotations = row["annotations"]["long_answer"][0]
+            correct_index = annotations["candidate_index"]
+            candidates = row['long_answer_candidates']
+
+            # TODO - generate a short answer mask to be trained on
+            # TODO - generate the label to train decoder on (-100 till the actual short answer)
+
+            # get 2 random and wrong indices
+            # wrong1 = correct_index
+            # wrong2 = correct_index
+            # while (wrong1 == correct_index or wrong2 == correct_index):
+            #     wrong1 = np.random.randint(0, len(candidates["top_level"]))
+            #     wrong2 = np.random.randint(0, len(candidates["top_level"]))
+
+            def get_string_tokens(index, candidates, doc):
+              start_token = candidates["start_token"][index]
+              end_token = candidates["end_token"][index]
+
+              # remove the html tags (irrelevant text)
+              # can consider keeping the html
+              is_not_html = np.invert(np.array(doc["tokens"]["is_html"]))[start_token:end_token]
+              tokens = np.array(doc["tokens"]["token"])[start_token:end_token]
+              string_tokens = " ".join(list(tokens[is_not_html]))
+
+              return string_tokens
+
+            # obtain the correct long answers
+            correct_long_answer = get_string_tokens(correct_index, candidates, doc)
+
+            # obtain the sentence embedding
+            tokens = self.tokenizer(get_string_tokens(correct_index, candidates, doc), return_tensors="pt", add_special_tokens=True)
+            total_la_len += len(tokens)
+            la_lens.append(tokens)
+            # answers.append(get_string_tokens(correct_index, candidates, doc)) # correct long answer
+            # answers.append(get_string_tokens(wrong1, candidates, doc)) # incorrect long answer
+            # answers.append(get_string_tokens(wrong2, candidates, doc)) # incorrect long answer
+
+            # check if true or false
+            # TODO - tune the ratio during training
+            # zeros = torch.zeros(size=(q_count,), dtype=torch.long)
+            # zeros[index] += 1
+            # labels.append(zeros)
+            # labels.append(torch.zeros(size=(q_count, ), dtype=torch.long))
+            # labels.append(torch.zeros(size=(q_count, ), dtype=torch.long))
+            # index += 1
+
+            # attach the short answers together
+            # TODO - if no short answers, just mask everything, and only train the long answer
+            annotations = row["annotations"]["short_answers"] # list of short answers
+            s_a_prompt: str = ""
+            for short_answer in annotations:
+                # print(short_answer['text'])
+                s_a_prompt += ",".join(short_answer["text"])
+            # s_a_prompt = s_a_prompt[:-1]
+            # print(s_a_prompt)
+
+            prompt = "Question: " + question + " [PAD]Answers: " + correct_long_answer + "[PAD][LA_SEP]" + "[PAD]Short answer: " # + tokenier_pad_token + short answer + right paddings
+            valid_prompts.append(prompt)
+            if (self.is_train):
+                prompt += s_a_prompt
+            # prompts.append(prompt)
+
+            # TODO - convert the prompt to tokens
+            tokens = self.tokenizer(prompt, return_tensors="pt", add_special_tokens=True)
+            total_prompt_len += len(tokens)
+            prompt_lens.append(tokens)
+
+        # tokenize and add padding to the questions and answers
+        # questions = self.tokenizer(questions, padding=True, max_length=int(max_len/4), truncation=True, return_tensors="pt", add_special_tokens=True)
+        # answers = self.tokenizer(answers, padding=True, max_length=int(max_len), truncation=True, return_tensors="pt", add_special_tokens=True)
+
+        # requires the padding mask of answers
+        # set a shorter max length to questions (128) as compared to answers (perhaps 512)
+        # best practice to find out the ave length of questions and answers
+        # question_mask = questions["attention_mask"]
+        # answer_mask = answers["attention_mask"]
+        # questions = torch.LongTensor(questions["input_ids"])
+        # answers = torch.LongTensor(answers["input_ids"])
+
+        # create a label 2d tensor from a list of tensors
+        # labels = torch.stack(labels, dim=0)
+
         # add attention masks for the questions and the answers
         # TODO - add short answer, and short answer mask
         # don't need wrong short answer since it is a generation task
-        return {"questions": questions, "question_mask": question_mask, "long_answers": answers, "answer_mask": answer_mask, "labels": labels}
+        return {"la_len": total_la_len, "prompt_len": total_prompt_len, "la_hist": la_lens, "prompt_hist": prompt_lens}
+
 
 if __name__=="__main__":
-    nq_dataloader = ModelDataLoader(batch_size=2)
-    for batch in nq_dataloader:
-        print(batch["questions"].shape)
-        print(batch["long_answers"].shape)
-        print(batch["labels"].shape)
-        break
+    # nq_dataloader = ModelDataLoader(batch_size=8)
+    # for batch in nq_dataloader:
+    #     print(batch["questions"].shape)
+    #     print(batch["long_answers"].shape)
+    #     print(batch["labels"].shape)
+    #     break
+    test_dataloader = TestDataLoader(batch_size=8)
+    long_answer_len = 0
+    total_prompt_len = 0
+    n = 0
+    for batch in test_dataloader:
+        long_answer_len += batch['la_len']
+        total_prompt_len += batch['prompt_len']
+        n += 8
+    print(f"Average token length of long answers: {long_answer_len / n}")
+    print(f"Average token length of prompts: {total_prompt_len / n}")
