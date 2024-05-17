@@ -6,7 +6,11 @@ from transformers import AutoTokenizer
 import numpy as np
 
 # from conf import max_len
-max_len = 512
+# max_len = 512
+
+# Set the maximum lenght
+question_max_len = 32
+answer_max_len = 2048
 
 def get_dataset():
   data = load_dataset("natural_questions")
@@ -130,6 +134,8 @@ class ModelDataLoader(DataLoader):
         prompts = []
         valid_prompts = []
 
+        short_answers = []
+
         index = 0
         q_count = len(batch)
         for row in batch:
@@ -159,7 +165,6 @@ class ModelDataLoader(DataLoader):
               end_token = candidates["end_token"][index]
 
               # remove the html tags (irrelevant text)
-              # can consider keeping the html
               is_not_html = np.invert(np.array(doc["tokens"]["is_html"]))[start_token:end_token]
               tokens = np.array(doc["tokens"]["token"])[start_token:end_token]
               string_tokens = " ".join(list(tokens[is_not_html]))
@@ -191,17 +196,19 @@ class ModelDataLoader(DataLoader):
                 s_a_prompt += short_answer["text"] + ","
             s_a_prompt = s_a_prompt[:-1]
 
+            short_answers.append(s_a_prompt)
+
+            # create the prompt
+            # TODO - set a terminating token [SEP] at the end of a sentence
             prompt = "Question: " + question + " [PAD]Answers: " + correct_long_answer + "[PAD][LA_SEP]" + "[PAD]Short answer: " # + tokenier_pad_token + short answer + right paddings
             valid_prompts.append(prompt)
             if (self.is_train):
                 prompt += s_a_prompt
             prompts.append(prompt)
 
-            # TODO - convert the prompt to tokens
-
         # tokenize and add padding to the questions and answers
-        questions = self.tokenizer(questions, padding=True, max_length=int(max_len/4), truncation=True, return_tensors="pt")
-        answers = self.tokenizer(answers, padding=True, max_length=int(max_len), truncation=True, return_tensors="pt")
+        questions = self.tokenizer(questions, padding=True, max_length=question_max_len, truncation=True, return_tensors="pt")
+        answers = self.tokenizer(answers, padding=True, max_length=int(answer_max_len), truncation=True, return_tensors="pt")
 
         # requires the padding mask of answers
         # set a shorter max length to questions (128) as compared to answers (perhaps 512)
@@ -215,18 +222,22 @@ class ModelDataLoader(DataLoader):
         labels = torch.stack(labels, dim=0)
 
         # create tensor of prompts and answer masks, as well as labels
-        prompt_max_len = 1024
-        prompts = self.tokenizer(prompts, padding=True, max_length=prompt_max_len, truncation=True, return_tensors="pt", add_special_tokens=True)
+        # prompt_max_len = 1024
+        prompts = self.tokenizer(prompts, padding=True, max_length=answer_max_len, truncation=True, return_tensors="pt", add_special_tokens=True)
         prompt_mask = prompts["attention_mask"]
         prompts = torch.LongTensor(questions['input_ids'])
 
-        # add attention masks for the questions and the answers
-        # TODO - create short answer labels (once I know the average length of prompt tokens)
+        # create short answer labels (once I know the average length of prompt tokens)
+        # concatenate the correct short answers with the prompt
+        prompt_labels = torch.full(size=(prompts.shape[0], prompts.shape[1] + answers.shape[1]), fill_value=-100) # batch x (prompt + long answer embeddings)
+        sa_output = self.tokenizer(short_answers, paddings=True, max_length=12, truncation=True, return_tensors="pt")
+        sa_labels = sa_output["input_ids"] * sa_output["attention_mask"] + (~sa_output["attention_mask"] * -100)
 
+        prompt_labels = torch.cat(prompt_labels, sa_labels)
 
         # don't need wrong short answer since it is a generation task
         return {"questions": questions, "question_mask": question_mask, "long_answers": answers, "long_answer_mask": answer_mask,
-                "long_answers_labels": labels, "prompts": prompts, "prompt_mask": prompt_mask, "short_answers_labels": ...}
+                "long_answers_labels": labels, "prompts": prompts, "prompt_mask": prompt_mask, "short_answers_labels": prompt_labels}
 
 class TestDataLoader(DataLoader):
     def __init__(self, batch_size, mode="train"):
@@ -255,17 +266,26 @@ class TestDataLoader(DataLoader):
 
         la_lens = []
         prompt_lens = []
+        q_lens = []
 
         prompts = []
         valid_prompts = []
 
         index = 0
+        total_q_len = 0
         total_la_len = 0
         total_prompt_len = 0
         q_count = len(batch)
         for row in batch:
             # get the question from the row
             question = row["question"]["text"]
+
+            tokens = self.tokenizer(question, return_tensors="pt", add_special_tokens=True)
+            # print(tokens)
+            # print(torch.numel(tokens['input_ids']))
+            total_q_len += torch.numel(tokens['input_ids'])
+            q_lens.append(torch.numel(tokens['input_ids']))
+
             # add questions to a list of questions
             questions.append(question)
 
@@ -302,8 +322,10 @@ class TestDataLoader(DataLoader):
 
             # obtain the sentence embedding
             tokens = self.tokenizer(get_string_tokens(correct_index, candidates, doc), return_tensors="pt", add_special_tokens=True)
-            total_la_len += len(tokens)
-            la_lens.append(tokens)
+            # print(tokens)
+            # print(torch.numel(tokens['input_ids']))
+            total_la_len += torch.numel(tokens['input_ids'])
+            la_lens.append(torch.numel(tokens['input_ids']))
             # answers.append(get_string_tokens(correct_index, candidates, doc)) # correct long answer
             # answers.append(get_string_tokens(wrong1, candidates, doc)) # incorrect long answer
             # answers.append(get_string_tokens(wrong2, candidates, doc)) # incorrect long answer
@@ -335,8 +357,8 @@ class TestDataLoader(DataLoader):
 
             # TODO - convert the prompt to tokens
             tokens = self.tokenizer(prompt, return_tensors="pt", add_special_tokens=True)
-            total_prompt_len += len(tokens)
-            prompt_lens.append(tokens)
+            total_prompt_len += torch.numel(tokens['input_ids'])
+            prompt_lens.append(torch.numel(tokens['input_ids']))
 
         # tokenize and add padding to the questions and answers
         # questions = self.tokenizer(questions, padding=True, max_length=int(max_len/4), truncation=True, return_tensors="pt", add_special_tokens=True)
@@ -356,7 +378,8 @@ class TestDataLoader(DataLoader):
         # add attention masks for the questions and the answers
         # TODO - add short answer, and short answer mask
         # don't need wrong short answer since it is a generation task
-        return {"la_len": total_la_len, "prompt_len": total_prompt_len, "la_hist": la_lens, "prompt_hist": prompt_lens}
+        return {"la_len": total_la_len, "prompt_len": total_prompt_len, "la_hist": la_lens, "prompt_hist": prompt_lens,
+                "q_len": total_q_len, "q_hist": q_lens}
 
 
 if __name__=="__main__":
@@ -369,10 +392,32 @@ if __name__=="__main__":
     test_dataloader = TestDataLoader(batch_size=8)
     long_answer_len = 0
     total_prompt_len = 0
+    q_len = 0
     n = 0
+    with open("/scratch/gilbreth/gao654/token_length.csv", 'a+') as file:
+        file.write("question,answer,prompt\n")
+
     for batch in test_dataloader:
+        # print(f"long answer lengths: {batch['la_len']}")
+        # print(f"prompt lengths: {batch['prompt_len']}")
+        q_len += batch["q_len"]
         long_answer_len += batch['la_len']
         total_prompt_len += batch['prompt_len']
         n += 8
+        # print(f"Data #{n}-{n+7}")
+        with open("/scratch/gilbreth/gao654/token_length.csv", 'a+') as file:
+            for i in range(8):
+                file.write(f"{batch['q_hist'][i]},{batch['la_hist'][i]},{batch['prompt_hist'][i]}\n")
+            # print(f"Average token length of questions: {q_len / n}")
+        # print(f"Average token length of long answers: {long_answer_len / n}")
+        # print(f"Average token length of prompts: {total_prompt_len / n}")
+    print('Final step: ')
+    print(f"Average token length of questions: {q_len / n}")
     print(f"Average token length of long answers: {long_answer_len / n}")
     print(f"Average token length of prompts: {total_prompt_len / n}")
+    with open("/scratch/gilbreth/gao654/token_length.csv", 'a+') as file:
+        file.write(f"Average token length of questions: {q_len / n}")
+        file.write(f"Average token length of long answers: {long_answer_len / n}")
+        file.write(f"Average token length of prompts: {total_prompt_len / n}")
+
+    # save the final histograms, try to plot them if possible
