@@ -45,13 +45,15 @@ class QAShortAnswer(nn.Module):
     def create_document_text(long_answers):
         pass
 
-class QAModel(nn.Module):
+class LongAnswerModel(nn.Module):
     def __init__(self, device):
-        super(QAModel, self).__init__()
+        super(LongAnswerModel, self).__init__()
         self.qbert = BertModel.from_pretrained("google-bert/bert-base-uncased").to(device)
         self.abert = BertModel.from_pretrained("google-bert/bert-base-uncased").to(device)
 
         self.cx_attention = [] # output remains query size, ie abatch x seqlen x 768
+        self.attention_layers = 6
+
         for _ in range(6):
             self.cx_attention.append(nn.MultiheadAttention(768, 2, batch_first=True, device=device))
             self.cx_attention.append(nn.Linear(in_features=768, out_features=768, device=device))
@@ -76,16 +78,115 @@ class QAModel(nn.Module):
         key = a_embeds
         value = a_embeds
         # run query through cross attention
-        for i in range(6):
+        for i in range(self.attention_layers):
             # cross attention layer
             query = self.cx_attention[i*3](query, key, value)[0] # 0th index is attn output, 1st index is attention weights
             # feedforward layer
             query = self.cx_attention[i*3+2](self.cx_attention[i*3+1](query))
 
 
-        # TODO - linear layer
+        # final linear layer to convert to binary value
         output = self.linear(query)
         return output.squeeze(-1)
+
+class ShortAnswerModel(device):
+    """
+    Constructor of the Short Answer Model
+    """
+    def __init__(self, device):
+        super(ShortAnswerModel, self).__init__(device=device)
+        self.device = device
+        self.decoder = GPT2LMHeadModel.from_pretrained("openai-community/gpt2")
+
+    """
+    Forward pass of the short answer model.
+
+    Args:
+    - long_answer_ids: long answer input ids (tokens)
+    - long_answer_mask: long answer attention masks
+
+    """
+    def forward(self, long_answer_ids, long_answer_mask, prompts, prompt_masks, labels):
+        # obtain the indices of special sep token for each prompt (1D tensor)
+        # id of special [LA_SEP] token = 30522
+        # TODO - find a way to not hardcode it
+        special_token = 30522
+        matches = (prompts == special_token)
+        indices = torch.argmax(matches.int(), dim=1)
+        # sets any non-matches to -1
+        indices[~matches.any(dim=1)] = -1
+
+        # convert the input ids to input embeddings
+        with torch.no_grad():
+            prompt_embeddings = self.decoder.wte(prompts)
+            la_embeddings = self.decoder.wte(long_answer_ids)
+
+        # concatenate the long answer embeddings to the prompts and labels
+        embeddings = []
+        masks = []
+        for i in range(batch_size):
+            row = prompt_embeddings[i]
+            if indices[i] == -1:
+                pass
+            else:
+                first_half = prompt_embeddings[i, :indices[i]]
+                second_half = prompt_embeddings[i, indices[i+1:]]
+                embeddings.append(torch.cat(first_half, la_embeddings[i], second_half))
+
+                left_mask = prompt_masks[i, :indices[i]]
+                right_mask = prompt_masks[i, indices[i+1:]]
+                masks.append(torch.cat(left_mask, long_answer_mask[i], right_mask))
+        embeddings = torch.stack(embeddings)
+        masks = torch.stack(masks)
+
+        # obtain the loss from the decoder
+        outputs = self.decoder.forward(input_embeds=embeddings, attention_mask=masks, labels=labels)
+        return outputs.loss
+
+class QAModel(device):
+    """
+    Constructor of the QA model
+    """
+    def __init__(self, device):
+        super(QAModel, self).__init__()
+        # contains a long answer model and short answer model
+        self.long_answer_model = LongAnswerModel(device)
+        self.short_answer_model = ShortAnswerModel(device)
+        self.device = device
+
+    """
+    Determines the forward function of the overall QA model
+
+    Args:
+    - la_inputs: long answer inputs, Tuple of
+        - question tokens: 2D tensor
+        - answer tokens: 2D tensor
+        - question mask: 2D tensor
+        - answer mask: 2D tensor
+    - sa_inputs: short answer inputs, Tuple of (long answer ids obtained from la_inputs)
+        - prompts: 2D tensor of tokens
+        - prompt_mask: 2D tensor of tokens
+        - labels: 2D tensor of tokens
+
+    Returns:
+    - losses: Tuple of
+        - la_loss: resulting from the long answer model (encoder)
+        - sa_loss: resulting from the short answer model (decoder)
+    """
+    def forward(self, la_inputs, sa_inputs):
+        # run the forward pass to the long answer retriever, and retrieve a long answer embedding
+        qtokens, atokens, qmask, amask = la_inputs
+        la_loss = self.long_answer_model(qtokens, atokens, qmask, amask)
+
+        # run the forward pass of the short answer model
+        prompts, prompt_mask, labels = sa_inputs
+        sa_loss = self.short_answer_model(atokens, amask, prompts, prompt_mask, labels)
+
+        return la_loss, sa_loss
+
+    # TODO - function that generates a short answer from a given input
+    def generate(self):
+        pass
 
 model = QAModel(device)
 
