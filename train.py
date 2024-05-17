@@ -24,26 +24,26 @@ Args
 def train_decode(model, batch):
     pass
 
-class QAShortAnswer(nn.Module):
-    def __init__(self, device):
-        super(QAShortAnswer, self).__init__(device=device)
-        self.decoder = GPT2LMHeadModel.from_pretrained("openai-community/gpt2")
+# class QAShortAnswer(nn.Module):
+#     def __init__(self, device):
+#         super(QAShortAnswer, self).__init__(device=device)
+#         self.decoder = GPT2LMHeadModel.from_pretrained("openai-community/gpt2")
 
-        # need a long answer bank, with the appropriate embeddings
-        # TODO - load a long answer bank (pre-trained long answer retriever)
+#         # need a long answer bank, with the appropriate embeddings
+#         # TODO - load a long answer bank (pre-trained long answer retriever)
 
-    def forward(self, tokens):
-        # TODO - design a prompt for the decoder
-        question = ...
-        # TODO - create a template for documents
-        documents = ...
-        predict_prompt = "Question: " + question + "Long answer: " + documents + "Long answer embeddings: " + ... + "Short Answer: "
+#     def forward(self, tokens):
+#         # TODO - design a prompt for the decoder
+#         question = ...
+#         # TODO - create a template for documents
+#         documents = ...
+#         predict_prompt = "Question: " + question + "Long answer: " + documents + "Long answer embeddings: " + ... + "Short Answer: "
 
-        # pass the tokens into the decoder
-        # if training, then just call the forward function and generate a loss
+#         # pass the tokens into the decoder
+#         # if training, then just call the forward function and generate a loss
 
-    def create_document_text(long_answers):
-        pass
+#     def create_document_text(long_answers):
+#         pass
 
 class LongAnswerModel(nn.Module):
     def __init__(self, device):
@@ -70,9 +70,6 @@ class LongAnswerModel(nn.Module):
 
         # extend the dimensions of the questions to the answer batch
         q_embeds = q_embeds.repeat(a_embeds.shape[0],1,1)
-
-        # print(f"q_embed shape:{q_embeds.shape}")
-        # print(f"a_embed shape:{a_embeds.shape}")
 
         query = q_embeds
         key = a_embeds
@@ -176,13 +173,13 @@ class QAModel(device):
     def forward(self, la_inputs, sa_inputs):
         # run the forward pass to the long answer retriever, and retrieve a long answer embedding
         qtokens, atokens, qmask, amask = la_inputs
-        la_loss = self.long_answer_model(qtokens, atokens, qmask, amask)
+        la_logit = self.long_answer_model(qtokens, atokens, qmask, amask)
 
         # run the forward pass of the short answer model
         prompts, prompt_mask, labels = sa_inputs
         sa_loss = self.short_answer_model(atokens, amask, prompts, prompt_mask, labels)
 
-        return la_loss, sa_loss
+        return la_logit, sa_loss
 
     # TODO - function that generates a short answer from a given input
     def generate(self):
@@ -231,28 +228,43 @@ def decoder_train(optimizer):
 def train(model, optimizer, criterion):
     # set model to training mode
     model.train()
-    epoch_loss = 0
+    epoch_la_loss = 0
+    epoch_sa_loss = 0
     data_num = 0
     for i, batch in enumerate(train_dataloader):
         questions = batch['questions'].to(device)
         question_mask = batch['question_mask'].to(device)
         answers = batch['long_answers'].to(device)
         answer_mask = batch['answer_mask'].to(device)
-        labels = batch['labels'].float().to(device)
+        long_answer_labels = batch['long_answer_labels'].float().to(device)
+
+        prompts = batch['prompts'].to(device)
+        prompt_mask = batch['prompt_mask'].to(device)
+        prompt_labels = batch['short_answer_labels'].to(device)
+
+        la_inputs = (questions, answers, question_mask, answer_mask)
+        sa_inputs = (answers, answer_mask, prompts, prompt_mask, prompt_labels)
+
         optimizer.zero_grad()
         # run Bert on both
-        y = model(questions, answers, question_mask, answer_mask)
-        loss = criterion(y, labels)
-        loss.backward()
+        la_logits, sa_loss = model(la_inputs, sa_inputs)
+        la_loss = criterion(la_logits, long_answer_labels)
+        la_loss.backward()
+        sa_loss.backward()
         optimizer.step()
-        epoch_loss += loss.item()
-        data_num += len(labels)
-        print('step :', i, ', loss :', loss.item())
-    return epoch_loss / data_num
+        epoch_la_loss += la_loss.item()
+        epoch_sa_loss += sa_loss.item()
+        data_num += len(long_answer_labels)
+
+
+        print('step :', i, ', la_loss :', la_loss.item())
+        print('step :', i, ', sa_loss :', sa_loss.item())
+    return epoch_la_loss / data_num, epoch_sa_loss / data_num
 
 def evaluate(model, criterion):
     model.eval()
-    epoch_loss = 0
+    epoch_la_loss = 0
+    epoch_sa_loss = 0
     data_num = 0
     val_dataloader = Dataloader(batch_size=batch_size, mode="valid")
     with torch.no_grad():
@@ -262,47 +274,59 @@ def evaluate(model, criterion):
             question_mask = batch['question_mask'].to(device)
             answers = batch['long_answers'].to(device)
             answer_mask = batch['answer_mask'].to(device)
-            labels = batch['labels'].to(device)
-            # run the model on the question and answers
-            y = model(questions, answers, question_mask, answer_mask)
-            loss = criterion(y, labels)
+            long_answer_labels = batch['long_answer_labels'].float().to(device)
 
-            epoch_loss += loss.item()
+            prompts = batch['prompts'].to(device)
+            prompt_mask = batch['prompt_mask'].to(device)
+            prompt_labels = batch['short_answer_labels'].to(device)
+
+            la_inputs = (questions, answers, question_mask, answer_mask)
+            sa_inputs = (answers, answer_mask, prompts, prompt_mask, prompt_labels)
+            # run the model on the question and answers
+            la_logits, sa_loss = model(la_inputs, sa_inputs)
+            loss = criterion(la_logits, long_answer_labels)
+
+            epoch_la_loss += loss.item()
+            epoch_sa_loss += sa_loss.item()
             data_num += questions.shape[0]
-    return epoch_loss / data_num
+    return epoch_la_loss / data_num, epoch_sa_loss / data_num
 
 def run(total_epoch, best_loss):
     import math
-    train_losses, test_losses = [], []
+    train_la_losses, test_la_losses = [], []
+    train_sa_losses, test_sa_losses = [], []
     for step in range(total_epoch):
         # train and evaluate model
         start_time = time.time()
-        train_loss = train(model, optimizer, criterion)
-        valid_loss = evaluate(model, criterion)
+        train_la_loss, train_sa_loss = train(model, optimizer, criterion)
+        valid_la_loss, valid_sa_loss = evaluate(model, criterion)
         end_time = time.time()
 
-        train_losses.append(train_loss)
-        test_losses.append(valid_loss)
+        train_la_losses.append(train_la_loss)
+        test_la_losses.append(valid_la_loss)
+        train_sa_losses.append(train_sa_loss)
+        test_sa_losses.append(valid_sa_loss)
 
         # time the process
         epoch_mins, epoch_secs = epoch_time(start_time, end_time)
 
         # saves the model with the best loss
-        if valid_loss < best_loss:
-            best_loss = valid_loss
-            torch.save(model.state_dict(), 'saved/model-{0}.pt'.format(valid_loss))
+        # TODO - what determines the best loss?
+        if valid_la_loss < best_la_loss:
+            best_la_loss = valid_la_loss
+            torch.save(model.state_dict(), 'saved/model-la{0}sa{1}.pt'.format(valid_la_loss, valid_sa_loss))
 
-        f = open('result/train_loss.txt', 'w')
-        f.write(str(train_losses))
+        f = open('result/train_la_loss.txt', 'w')
+        f.write(str(train_la_losses))
         f.close()
 
-        f = open('result/test_loss.txt', 'w')
-        f.write(str(test_losses))
+        f = open('result/test_la_loss.txt', 'w')
+        f.write(str(test_la_losses))
         f.close()
 
         print(f'Epoch: {step + 1} | Time: {epoch_mins}m {epoch_secs}s')
-        print(f'\tTrain Loss: {train_loss:.3f} | Train PPL: {math.exp(train_loss):7.3f}')
-        print(f'\tVal Loss: {valid_loss:.3f} |  Val PPL: {math.exp(valid_loss):7.3f}')
+        print(f'\tTrain Loss: {train_la_loss:.3f} | Train PPL: {math.exp(train_la_loss):7.3f}')
+        print(f'\tVal Loss: {valid_la_loss:.3f} |  Val PPL: {math.exp(valid_la_loss):7.3f}')
 
 def decoder_run(total_epoch, best_loss):
     import math
