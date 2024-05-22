@@ -27,6 +27,6 @@ class LongAnswerModel(nn.Module):
         key = a_embeds
         value = a_embeds
 
-        output = self.cross_attention(query, key, value)
-        output = self.linear(output)
-        return output
+        embeddings = self.cross_attention(query, key, value)
+        logits = self.linear(embeddings)
+        return logits, embeddings
