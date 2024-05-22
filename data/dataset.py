@@ -1,24 +1,16 @@
 import numpy as np
 
 from torch.utils.data import Dataset
+from utils.get_dataset import get_dataset
 
 """
 Dataset contains a list of questions, with corresponding long answers (and the correct one), and the corresponding
 short answer (should I add a label too?)
 """
 class NQDataset(Dataset):
-    def __init__(self, data):
-        self.data = data
-        self.len = len(data)
-        self.output = []
-
-        # TODO - data processing
-        for row in data:
-            # extract questions
-            # get the question from the row
-
-
-            self.output.append()
+    def __init__(self):
+        self.data, _ = get_dataset()
+        self.len = len(self.data)
 
     def get_string_tokens(self, index, candidates, doc):
         start_token = candidates["start_token"][index]
@@ -59,9 +51,12 @@ class NQDataset(Dataset):
 
         # extract short answers
         short_answer_annotations = row["annotations"]["short_answers"] # list of short answers
+
+        print(short_answer_annotations)
+
         s_a_prompt: str = ""
         for short_answer in short_answer_annotations:
-            s_a_prompt += short_answer["text"] + ","
+            s_a_prompt += short_answer["text"][0] + ","
         s_a_prompt = s_a_prompt[:-1]
 
         # generate the prompt
@@ -72,3 +67,9 @@ class NQDataset(Dataset):
                 "wrong_long_answers": [wrong_answer1, wrong_answer2],
                 "short_answer": s_a_prompt,
                 "prompt": prompt}
+
+if __name__ == "__main__":
+    # create a dataset and check the entries
+    dataset = NQDataset()
+    print(dataset)
+    print(dataset[1])
