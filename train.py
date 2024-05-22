@@ -9,41 +9,13 @@ import time
 from conf import *
 from data.dataloader_nq import ModelDataLoader as Dataloader
 from data.dataloader_nq import DecoderDataLoader
+from utils.epoch_time import epoch_time
 
 def epoch_time(start_time, end_time):
     elapsed_time = end_time - start_time
     elapsed_mins = int(elapsed_time / 60)
     elapsed_secs = int(elapsed_time - (elapsed_mins * 60))
     return elapsed_mins, elapsed_secs
-
-"""
-Args
-- model: pre-trained decoder model
-- batch: each includes questions, correct short answers and correct long answer
-"""
-def train_decode(model, batch):
-    pass
-
-# class QAShortAnswer(nn.Module):
-#     def __init__(self, device):
-#         super(QAShortAnswer, self).__init__(device=device)
-#         self.decoder = GPT2LMHeadModel.from_pretrained("openai-community/gpt2")
-
-#         # need a long answer bank, with the appropriate embeddings
-#         # TODO - load a long answer bank (pre-trained long answer retriever)
-
-#     def forward(self, tokens):
-#         # TODO - design a prompt for the decoder
-#         question = ...
-#         # TODO - create a template for documents
-#         documents = ...
-#         predict_prompt = "Question: " + question + "Long answer: " + documents + "Long answer embeddings: " + ... + "Short Answer: "
-
-#         # pass the tokens into the decoder
-#         # if training, then just call the forward function and generate a loss
-
-#     def create_document_text(long_answers):
-#         pass
 
 class LongAnswerModel(nn.Module):
     def __init__(self, device):
@@ -81,10 +53,12 @@ class LongAnswerModel(nn.Module):
             # feedforward layer
             query = self.cx_attention[i*3+2](self.cx_attention[i*3+1](query))
 
+        # obtain the long answer embeddings before the linear layer
+        long_answer_embeddings = query
 
         # final linear layer to convert to binary value
         output = self.linear(query)
-        return output.squeeze(-1)
+        return output.squeeze(-1), long_answer_embeddings
 
 class ShortAnswerModel(device):
     """
@@ -103,11 +77,10 @@ class ShortAnswerModel(device):
     - long_answer_mask: long answer attention masks
 
     """
-    def forward(self, long_answer_ids, long_answer_mask, prompts, prompt_masks, labels):
+    def forward(self, long_answer_embeddings, prompts, prompt_masks, labels):
         # obtain the indices of special sep token for each prompt (1D tensor)
-        # id of special [LA_SEP] token = 30522
-        # TODO - find a way to not hardcode it
-        special_token = 30522
+        # TODO - special token id is 50257, find a way not to hardcode that number
+        special_token = 50257
         matches = (prompts == special_token)
         indices = torch.argmax(matches.int(), dim=1)
         # sets any non-matches to -1
@@ -116,28 +89,18 @@ class ShortAnswerModel(device):
         # convert the input ids to input embeddings
         with torch.no_grad():
             prompt_embeddings = self.decoder.wte(prompts)
-            la_embeddings = self.decoder.wte(long_answer_ids)
 
         # concatenate the long answer embeddings to the prompts and labels
-        embeddings = []
-        masks = []
         for i in range(batch_size):
             row = prompt_embeddings[i]
             if indices[i] == -1:
                 pass
             else:
-                first_half = prompt_embeddings[i, :indices[i]]
-                second_half = prompt_embeddings[i, indices[i+1:]]
-                embeddings.append(torch.cat(first_half, la_embeddings[i], second_half))
-
-                left_mask = prompt_masks[i, :indices[i]]
-                right_mask = prompt_masks[i, indices[i+1:]]
-                masks.append(torch.cat(left_mask, long_answer_mask[i], right_mask))
-        embeddings = torch.stack(embeddings)
-        masks = torch.stack(masks)
+                # Replace the special token with the long answer embeddings
+                row[indices[i]] = long_answer_embeddings[i]
 
         # obtain the loss from the decoder
-        outputs = self.decoder.forward(input_embeds=embeddings, attention_mask=masks, labels=labels)
+        outputs = self.decoder.forward(input_embeds=prompt_embeddings, attention_mask=prompt_masks, labels=labels)
         return outputs.loss
 
 class QAModel(device):
@@ -173,11 +136,11 @@ class QAModel(device):
     def forward(self, la_inputs, sa_inputs):
         # run the forward pass to the long answer retriever, and retrieve a long answer embedding
         qtokens, atokens, qmask, amask = la_inputs
-        la_logit = self.long_answer_model(qtokens, atokens, qmask, amask)
+        la_logit, long_answer_embeddings = self.long_answer_model(qtokens, atokens, qmask, amask)
 
         # run the forward pass of the short answer model
         prompts, prompt_mask, labels = sa_inputs
-        sa_loss = self.short_answer_model(atokens, amask, prompts, prompt_mask, labels)
+        sa_loss = self.short_answer_model(long_answer_embeddings, prompts, prompt_mask, labels)
 
         return la_logit, sa_loss
 
@@ -201,28 +164,28 @@ scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer=optimizer,
                                                  patience=patience)
 criterion = nn.BCEWithLogitsLoss()
 
-def decoder_train(optimizer):
-    epoch_loss = 0
-    data_num = 0
+# def decoder_train(optimizer):
+#     epoch_loss = 0
+#     data_num = 0
 
-    model = GPT2LMHeadModel.from_pretrained("openai-community/gpt2")
-    model.train()
-    dataloader = DecoderDataLoader(device)
-    for i, batch in enumerate(dataloader):
-        input_ids = batch["input_ids"].to(device)
-        mask = batch["mask"].to(device)
-        labels = batch["labels"].to(device)
-        optimizer.zero_grad()
+#     model = GPT2LMHeadModel.from_pretrained("openai-community/gpt2")
+#     model.train()
+#     dataloader = DecoderDataLoader(device)
+#     for i, batch in enumerate(dataloader):
+#         input_ids = batch["input_ids"].to(device)
+#         mask = batch["mask"].to(device)
+#         labels = batch["labels"].to(device)
+#         optimizer.zero_grad()
 
-        # run the decoder on the input
-        loss = model(input_ids, mask, labels=labels)
-        loss.backward()
-        optimizer.step()
+#         # run the decoder on the input
+#         loss = model(input_ids, mask, labels=labels)
+#         loss.backward()
+#         optimizer.step()
 
-        # update total loss
-        epoch_loss += loss.item()
-        data_num += len(labels)
-    return epoch_loss / data_num
+#         # update total loss
+#         epoch_loss += loss.item()
+#         data_num += len(labels)
+#     return epoch_loss / data_num
 
 
 def train(model, optimizer, criterion):
@@ -230,6 +193,7 @@ def train(model, optimizer, criterion):
     model.train()
     epoch_la_loss = 0
     epoch_sa_loss = 0
+    epoch_loss = 0
     data_num = 0
     for i, batch in enumerate(train_dataloader):
         questions = batch['questions'].to(device)
@@ -249,22 +213,24 @@ def train(model, optimizer, criterion):
         # run Bert on both
         la_logits, sa_loss = model(la_inputs, sa_inputs)
         la_loss = criterion(la_logits, long_answer_labels)
-        la_loss.backward()
-        sa_loss.backward()
+        loss = la_loss + sa_loss
+        loss.backward()
         optimizer.step()
         epoch_la_loss += la_loss.item()
         epoch_sa_loss += sa_loss.item()
+        epoch_loss += loss.item()
         data_num += len(long_answer_labels)
 
-
+        print('step :', i, ', loss :', loss.item())
         print('step :', i, ', la_loss :', la_loss.item())
         print('step :', i, ', sa_loss :', sa_loss.item())
-    return epoch_la_loss / data_num, epoch_sa_loss / data_num
+    return epoch_la_loss / data_num, epoch_sa_loss / data_num, epoch_loss / data_num
 
 def evaluate(model, criterion):
     model.eval()
     epoch_la_loss = 0
     epoch_sa_loss = 0
+    epoch_loss = 0
     data_num = 0
     val_dataloader = Dataloader(batch_size=batch_size, mode="valid")
     with torch.no_grad():
@@ -288,33 +254,36 @@ def evaluate(model, criterion):
 
             epoch_la_loss += loss.item()
             epoch_sa_loss += sa_loss.item()
+            epoch_loss += loss.item()
             data_num += questions.shape[0]
-    return epoch_la_loss / data_num, epoch_sa_loss / data_num
+    return epoch_la_loss / data_num, epoch_sa_loss / data_num, epoch_loss / data_num
 
 def run(total_epoch, best_loss):
     import math
     train_la_losses, test_la_losses = [], []
     train_sa_losses, test_sa_losses = [], []
+    train_losses, test_losses = [], []
     for step in range(total_epoch):
         # train and evaluate model
         start_time = time.time()
-        train_la_loss, train_sa_loss = train(model, optimizer, criterion)
-        valid_la_loss, valid_sa_loss = evaluate(model, criterion)
+        train_la_loss, train_sa_loss, train_loss = train(model, optimizer, criterion)
+        valid_la_loss, valid_sa_loss, valid_loss = evaluate(model, criterion)
         end_time = time.time()
 
         train_la_losses.append(train_la_loss)
         test_la_losses.append(valid_la_loss)
         train_sa_losses.append(train_sa_loss)
         test_sa_losses.append(valid_sa_loss)
+        train_losses.append(train_loss)
+        test_losses.append(valid_loss)
 
         # time the process
         epoch_mins, epoch_secs = epoch_time(start_time, end_time)
 
-        # saves the model with the best loss
-        # TODO - what determines the best loss?
-        if valid_la_loss < best_la_loss:
-            best_la_loss = valid_la_loss
-            torch.save(model.state_dict(), 'saved/model-la{0}sa{1}.pt'.format(valid_la_loss, valid_sa_loss))
+        # saves the model with the best loss overall
+        if valid_loss < best_loss:
+            best_loss = valid_loss
+            torch.save(model.state_dict(), 'saved/model-la{0}sa{1}loss{2}.pt'.format(valid_la_loss, valid_sa_loss, valid_loss))
 
         f = open('result/train_la_loss.txt', 'w')
         f.write(str(train_la_losses))
@@ -328,40 +297,40 @@ def run(total_epoch, best_loss):
         print(f'\tTrain Loss: {train_la_loss:.3f} | Train PPL: {math.exp(train_la_loss):7.3f}')
         print(f'\tVal Loss: {valid_la_loss:.3f} |  Val PPL: {math.exp(valid_la_loss):7.3f}')
 
-def decoder_run(total_epoch, best_loss):
-    import math
-    train_losses, test_losses = [], []
-    for step in range(total_epoch):
-        # train and evaluate model
-        start_time = time.time()
-        train_loss = decoder_train(optimizer, criterion)
-        # valid_loss = evaluate(model, criterion)
-        end_time = time.time()
+# def decoder_run(total_epoch, best_loss):
+#     import math
+#     train_losses, test_losses = [], []
+#     for step in range(total_epoch):
+#         # train and evaluate model
+#         start_time = time.time()
+#         train_loss = decoder_train(optimizer, criterion)
+#         # valid_loss = evaluate(model, criterion)
+#         end_time = time.time()
 
-        train_losses.append(train_loss)
-        # test_losses.append(valid_loss)
+#         train_losses.append(train_loss)
+#         # test_losses.append(valid_loss)
 
-        # time the process
-        epoch_mins, epoch_secs = epoch_time(start_time, end_time)
+#         # time the process
+#         epoch_mins, epoch_secs = epoch_time(start_time, end_time)
 
-        # saves the model with the best loss
-        # if valid_loss < best_loss:
-        #     best_loss = valid_loss
-        #     torch.save(model.state_dict(), 'saved/model-{0}.pt'.format(valid_loss))
-        if train_loss < best_loss:
-            best_loss = train_loss
-            torch.save(model.state_dict(), 'saved/model-{0}.pt'.format(train_loss))
+#         # saves the model with the best loss
+#         # if valid_loss < best_loss:
+#         #     best_loss = valid_loss
+#         #     torch.save(model.state_dict(), 'saved/model-{0}.pt'.format(valid_loss))
+#         if train_loss < best_loss:
+#             best_loss = train_loss
+#             torch.save(model.state_dict(), 'saved/model-{0}.pt'.format(train_loss))
 
-        f = open('result/train_loss.txt', 'w')
-        f.write(str(train_losses))
-        f.close()
+#         f = open('result/train_loss.txt', 'w')
+#         f.write(str(train_losses))
+#         f.close()
 
-        # f = open('result/test_loss.txt', 'w')
-        # f.write(str(test_losses))
-        # f.close()
+#         # f = open('result/test_loss.txt', 'w')
+#         # f.write(str(test_losses))
+#         # f.close()
 
-        print(f'Epoch: {step + 1} | Time: {epoch_mins}m {epoch_secs}s')
-        print(f'\tTrain Loss: {train_loss:.3f} | Train PPL: {math.exp(train_loss):7.3f}')
-        # print(f'\tVal Loss: {valid_loss:.3f} |  Val PPL: {math.exp(valid_loss):7.3f}')
+#         print(f'Epoch: {step + 1} | Time: {epoch_mins}m {epoch_secs}s')
+#         print(f'\tTrain Loss: {train_loss:.3f} | Train PPL: {math.exp(train_loss):7.3f}')
+#         # print(f'\tVal Loss: {valid_loss:.3f} |  Val PPL: {math.exp(valid_loss):7.3f}')
 if __name__ == "__main__":
     run(total_epoch=epoch, best_loss=inf)
