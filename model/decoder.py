@@ -46,3 +46,16 @@ class ShortAnswerDecoder(nn.Module):
         # obtain the loss from the decoder
         outputs = self.decoder.forward(input_embeds=prompt_embeddings, attention_mask=prompt_masks, labels=labels)
         return outputs.loss
+
+if __name__ == "__main__":
+    from data import NQDataset, NQDataLoader
+    from conf import device
+    ds = NQDataset()
+    dl = NQDataLoader(ds, batch_size=1)
+    lae = torch.randn(size=(768,1))
+    print(lae.shape)
+    model = ShortAnswerDecoder(device)
+    for batch in dl:
+        loss = model(lae, batch["prompts"], batch['prompt_mask'], batch["short_answers_labels"])
+        print(f"loss={loss}")
+        break

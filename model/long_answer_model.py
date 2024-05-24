@@ -1,8 +1,8 @@
 import torch.nn as nn
 
-from question_encoder import QuestionEncoder
-from long_answer_encoder import LongAnswerEncoder
-from cross_attention import CrossAttentionModule
+from .question_encoder import QuestionEncoder
+from .long_answer_encoder import LongAnswerEncoder
+from .cross_attention import CrossAttentionModule
 
 class LongAnswerModel(nn.Module):
     def __init__(self, device):

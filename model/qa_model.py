@@ -1,7 +1,7 @@
 import torch.nn as nn
 
-from long_answer_model import LongAnswerModel
-from decoder import ShortAnswerDecoder
+from .long_answer_model import LongAnswerModel
+from .decoder import ShortAnswerDecoder
 
 class QAModel(nn.Module):
     """
