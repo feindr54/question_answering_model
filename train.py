@@ -2,20 +2,12 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.optim import Adam
-import numpy as np
-from transformers import BertModel, GPT2LMHeadModel, AutoTokenizer
+from transformers import BertModel, GPT2LMHeadModel
 import time
 
 from conf import *
 from data.dataloader_nq import ModelDataLoader as Dataloader
-from data.dataloader_nq import DecoderDataLoader
 from utils.epoch_time import epoch_time
-
-def epoch_time(start_time, end_time):
-    elapsed_time = end_time - start_time
-    elapsed_mins = int(elapsed_time / 60)
-    elapsed_secs = int(elapsed_time - (elapsed_mins * 60))
-    return elapsed_mins, elapsed_secs
 
 class LongAnswerModel(nn.Module):
     def __init__(self, device):
