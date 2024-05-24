@@ -60,7 +60,7 @@ class NQDataset(Dataset):
         s_a_prompt = s_a_prompt[:-1]
 
         # generate the prompt
-        prompt = "Question: " + question + " [PAD]Answers: " + correct_long_answer + "[PAD][LA_SEP]" + "[PAD]Short answer: " # + tokenier_pad_token + short answer + right paddings
+        prompt = "Question: " + question + " [PAD]Answers: " + correct_long_answer + "[PAD][LA_SEP][PAD]Short answer: " # + tokenier_pad_token + short answer + right paddings
 
         return {"question": question,
                 "correct_long_answer": correct_long_answer,
