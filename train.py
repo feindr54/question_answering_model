@@ -2,148 +2,150 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.optim import Adam
-from transformers import BertModel, GPT2LMHeadModel
 import time
 
 from conf import *
-from data.dataloader_nq import ModelDataLoader as Dataloader
+# from data.dataloader_nq import ModelDataLoader as Dataloader
+from data import NQDataset, NQDataLoader
+from model import QAModel
 from utils.epoch_time import epoch_time
 
-class LongAnswerModel(nn.Module):
-    def __init__(self, device):
-        super(LongAnswerModel, self).__init__()
-        self.qbert = BertModel.from_pretrained("google-bert/bert-base-uncased").to(device)
-        self.abert = BertModel.from_pretrained("google-bert/bert-base-uncased").to(device)
+# class LongAnswerModel(nn.Module):
+#     def __init__(self, device):
+#         super(LongAnswerModel, self).__init__()
+#         self.qbert = BertModel.from_pretrained("google-bert/bert-base-uncased").to(device)
+#         self.abert = BertModel.from_pretrained("google-bert/bert-base-uncased").to(device)
 
-        self.cx_attention = [] # output remains query size, ie abatch x seqlen x 768
-        self.attention_layers = 6
+#         self.cx_attention = [] # output remains query size, ie abatch x seqlen x 768
+#         self.attention_layers = 6
 
-        for _ in range(6):
-            self.cx_attention.append(nn.MultiheadAttention(768, 2, batch_first=True, device=device))
-            self.cx_attention.append(nn.Linear(in_features=768, out_features=768, device=device))
-            self.cx_attention.append(nn.ReLU())
-        # add some feedforward and ReLU (input output same shape) between cross attention
-        self.linear = nn.Linear(768,1, device=device) # input is batch * answers * 768
-        self.device = device
+#         for _ in range(6):
+#             self.cx_attention.append(nn.MultiheadAttention(768, 2, batch_first=True, device=device))
+#             self.cx_attention.append(nn.Linear(in_features=768, out_features=768, device=device))
+#             self.cx_attention.append(nn.ReLU())
+#         # add some feedforward and ReLU (input output same shape) between cross attention
+#         self.linear = nn.Linear(768,1, device=device) # input is batch * answers * 768
+#         self.device = device
 
-    def forward(self, question, answer, question_mask, answer_mask):
-        # obtain bert embeddings of question and answer with attention mask
-        # get the pooled output for the questions, and the unpooled output from the answers
-        q_embeds = self.qbert(question, question_mask).pooler_output.to(self.device) # (abatch) * qbatch x 768
-        a_embeds = self.abert(answer, answer_mask).last_hidden_state.to(self.device) # abatch x seqlen x 768
+#     def forward(self, question, answer, question_mask, answer_mask):
+#         # obtain bert embeddings of question and answer with attention mask
+#         # get the pooled output for the questions, and the unpooled output from the answers
+#         q_embeds = self.qbert(question, question_mask).pooler_output.to(self.device) # (abatch) * qbatch x 768
+#         a_embeds = self.abert(answer, answer_mask).last_hidden_state.to(self.device) # abatch x seqlen x 768
 
-        # extend the dimensions of the questions to the answer batch
-        q_embeds = q_embeds.repeat(a_embeds.shape[0],1,1)
+#         # extend the dimensions of the questions to the answer batch
+#         q_embeds = q_embeds.repeat(a_embeds.shape[0],1,1)
 
-        query = q_embeds
-        key = a_embeds
-        value = a_embeds
-        # run query through cross attention
-        for i in range(self.attention_layers):
-            # cross attention layer
-            query = self.cx_attention[i*3](query, key, value)[0] # 0th index is attn output, 1st index is attention weights
-            # feedforward layer
-            query = self.cx_attention[i*3+2](self.cx_attention[i*3+1](query))
+#         query = q_embeds
+#         key = a_embeds
+#         value = a_embeds
+#         # run query through cross attention
+#         for i in range(self.attention_layers):
+#             # cross attention layer
+#             query = self.cx_attention[i*3](query, key, value)[0] # 0th index is attn output, 1st index is attention weights
+#             # feedforward layer
+#             query = self.cx_attention[i*3+2](self.cx_attention[i*3+1](query))
 
-        # obtain the long answer embeddings before the linear layer
-        long_answer_embeddings = query
+#         # obtain the long answer embeddings before the linear layer
+#         long_answer_embeddings = query
 
-        # final linear layer to convert to binary value
-        output = self.linear(query)
-        return output.squeeze(-1), long_answer_embeddings
+#         # final linear layer to convert to binary value
+#         output = self.linear(query)
+#         return output.squeeze(-1), long_answer_embeddings
 
-class ShortAnswerModel(device):
-    """
-    Constructor of the Short Answer Model
-    """
-    def __init__(self, device):
-        super(ShortAnswerModel, self).__init__(device=device)
-        self.device = device
-        self.decoder = GPT2LMHeadModel.from_pretrained("openai-community/gpt2")
+# class ShortAnswerModel(device):
+#     """
+#     Constructor of the Short Answer Model
+#     """
+#     def __init__(self, device):
+#         super(ShortAnswerModel, self).__init__(device=device)
+#         self.device = device
+#         self.decoder = GPT2LMHeadModel.from_pretrained("openai-community/gpt2")
 
-    """
-    Forward pass of the short answer model.
+#     """
+#     Forward pass of the short answer model.
 
-    Args:
-    - long_answer_ids: long answer input ids (tokens)
-    - long_answer_mask: long answer attention masks
+#     Args:
+#     - long_answer_ids: long answer input ids (tokens)
+#     - long_answer_mask: long answer attention masks
 
-    """
-    def forward(self, long_answer_embeddings, prompts, prompt_masks, labels):
-        # obtain the indices of special sep token for each prompt (1D tensor)
-        # TODO - special token id is 50257, find a way not to hardcode that number
-        special_token = 50257
-        matches = (prompts == special_token)
-        indices = torch.argmax(matches.int(), dim=1)
-        # sets any non-matches to -1
-        indices[~matches.any(dim=1)] = -1
+#     """
+#     def forward(self, long_answer_embeddings, prompts, prompt_masks, labels):
+#         # obtain the indices of special sep token for each prompt (1D tensor)
+#         # TODO - special token id is 50257, find a way not to hardcode that number
+#         special_token = 50257
+#         matches = (prompts == special_token)
+#         indices = torch.argmax(matches.int(), dim=1)
+#         # sets any non-matches to -1
+#         indices[~matches.any(dim=1)] = -1
 
-        # convert the input ids to input embeddings
-        with torch.no_grad():
-            prompt_embeddings = self.decoder.wte(prompts)
+#         # convert the input ids to input embeddings
+#         with torch.no_grad():
+#             prompt_embeddings = self.decoder.wte(prompts)
 
-        # concatenate the long answer embeddings to the prompts and labels
-        for i in range(batch_size):
-            row = prompt_embeddings[i]
-            if indices[i] == -1:
-                pass
-            else:
-                # Replace the special token with the long answer embeddings
-                row[indices[i]] = long_answer_embeddings[i]
+#         # concatenate the long answer embeddings to the prompts and labels
+#         for i in range(batch_size):
+#             row = prompt_embeddings[i]
+#             if indices[i] == -1:
+#                 pass
+#             else:
+#                 # Replace the special token with the long answer embeddings
+#                 row[indices[i]] = long_answer_embeddings[i]
 
-        # obtain the loss from the decoder
-        outputs = self.decoder.forward(input_embeds=prompt_embeddings, attention_mask=prompt_masks, labels=labels)
-        return outputs.loss
+#         # obtain the loss from the decoder
+#         outputs = self.decoder.forward(input_embeds=prompt_embeddings, attention_mask=prompt_masks, labels=labels)
+#         return outputs.loss
 
-class QAModel(device):
-    """
-    Constructor of the QA model
-    """
-    def __init__(self, device):
-        super(QAModel, self).__init__()
-        # contains a long answer model and short answer model
-        self.long_answer_model = LongAnswerModel(device)
-        self.short_answer_model = ShortAnswerModel(device)
-        self.device = device
+# class QAModel(device):
+#     """
+#     Constructor of the QA model
+#     """
+#     def __init__(self, device):
+#         super(QAModel, self).__init__()
+#         # contains a long answer model and short answer model
+#         self.long_answer_model = LongAnswerModel(device)
+#         self.short_answer_model = ShortAnswerModel(device)
+#         self.device = device
 
-    """
-    Determines the forward function of the overall QA model
+#     """
+#     Determines the forward function of the overall QA model
 
-    Args:
-    - la_inputs: long answer inputs, Tuple of
-        - question tokens: 2D tensor
-        - answer tokens: 2D tensor
-        - question mask: 2D tensor
-        - answer mask: 2D tensor
-    - sa_inputs: short answer inputs, Tuple of (long answer ids obtained from la_inputs)
-        - prompts: 2D tensor of tokens
-        - prompt_mask: 2D tensor of tokens
-        - labels: 2D tensor of tokens
+#     Args:
+#     - la_inputs: long answer inputs, Tuple of
+#         - question tokens: 2D tensor
+#         - answer tokens: 2D tensor
+#         - question mask: 2D tensor
+#         - answer mask: 2D tensor
+#     - sa_inputs: short answer inputs, Tuple of (long answer ids obtained from la_inputs)
+#         - prompts: 2D tensor of tokens
+#         - prompt_mask: 2D tensor of tokens
+#         - labels: 2D tensor of tokens
 
-    Returns:
-    - losses: Tuple of
-        - la_loss: resulting from the long answer model (encoder)
-        - sa_loss: resulting from the short answer model (decoder)
-    """
-    def forward(self, la_inputs, sa_inputs):
-        # run the forward pass to the long answer retriever, and retrieve a long answer embedding
-        qtokens, atokens, qmask, amask = la_inputs
-        la_logit, long_answer_embeddings = self.long_answer_model(qtokens, atokens, qmask, amask)
+#     Returns:
+#     - losses: Tuple of
+#         - la_loss: resulting from the long answer model (encoder)
+#         - sa_loss: resulting from the short answer model (decoder)
+#     """
+#     def forward(self, la_inputs, sa_inputs):
+#         # run the forward pass to the long answer retriever, and retrieve a long answer embedding
+#         qtokens, atokens, qmask, amask = la_inputs
+#         la_logit, long_answer_embeddings = self.long_answer_model(qtokens, atokens, qmask, amask)
 
-        # run the forward pass of the short answer model
-        prompts, prompt_mask, labels = sa_inputs
-        sa_loss = self.short_answer_model(long_answer_embeddings, prompts, prompt_mask, labels)
+#         # run the forward pass of the short answer model
+#         prompts, prompt_mask, labels = sa_inputs
+#         sa_loss = self.short_answer_model(long_answer_embeddings, prompts, prompt_mask, labels)
 
-        return la_logit, sa_loss
+#         return la_logit, sa_loss
 
-    # TODO - function that generates a short answer from a given input
-    def generate(self):
-        pass
+#     # TODO - function that generates a short answer from a given input
+#     def generate(self):
+#         pass
 
-model = QAModel(device)
+model = QAModel(device).cuda(device=device)
 
-train_dataloader = Dataloader(batch_size=batch_size, mode="train")
-# val_dataloader = Dataloader(batch_size=batch_size, mode="valid")
+train_dataset = NQDataset()
+train_dataloader = NQDataLoader(train_dataset, batch_size=batch_size, mode="train")
+val_dataloader = NQDataLoader(batch_size=batch_size, mode="valid")
 
 optimizer = Adam(params=model.parameters(),
                  lr=init_lr,
@@ -156,30 +158,6 @@ scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer=optimizer,
                                                  patience=patience)
 criterion = nn.BCEWithLogitsLoss()
 
-# def decoder_train(optimizer):
-#     epoch_loss = 0
-#     data_num = 0
-
-#     model = GPT2LMHeadModel.from_pretrained("openai-community/gpt2")
-#     model.train()
-#     dataloader = DecoderDataLoader(device)
-#     for i, batch in enumerate(dataloader):
-#         input_ids = batch["input_ids"].to(device)
-#         mask = batch["mask"].to(device)
-#         labels = batch["labels"].to(device)
-#         optimizer.zero_grad()
-
-#         # run the decoder on the input
-#         loss = model(input_ids, mask, labels=labels)
-#         loss.backward()
-#         optimizer.step()
-
-#         # update total loss
-#         epoch_loss += loss.item()
-#         data_num += len(labels)
-#     return epoch_loss / data_num
-
-
 def train(model, optimizer, criterion):
     # set model to training mode
     model.train()
@@ -191,7 +169,7 @@ def train(model, optimizer, criterion):
         questions = batch['questions'].to(device)
         question_mask = batch['question_mask'].to(device)
         answers = batch['long_answers'].to(device)
-        answer_mask = batch['answer_mask'].to(device)
+        answer_mask = batch['long_answer_mask'].to(device)
         long_answer_labels = batch['long_answer_labels'].float().to(device)
 
         prompts = batch['prompts'].to(device)
@@ -199,7 +177,7 @@ def train(model, optimizer, criterion):
         prompt_labels = batch['short_answer_labels'].to(device)
 
         la_inputs = (questions, answers, question_mask, answer_mask)
-        sa_inputs = (answers, answer_mask, prompts, prompt_mask, prompt_labels)
+        sa_inputs = (prompts, prompt_mask, prompt_labels)
 
         optimizer.zero_grad()
         # run Bert on both
