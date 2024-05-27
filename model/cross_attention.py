@@ -2,6 +2,7 @@ import torch.nn as nn
 
 class CrossAttentionModule(nn.Module):
     def __init__(self, device, attention_layers=6):
+        super(CrossAttentionModule, self).__init__()
         self.cx_attention = [] # output remains query size, ie abatch x seqlen x 768
         self.attention_layers = attention_layers
 
@@ -11,6 +12,9 @@ class CrossAttentionModule(nn.Module):
             self.cx_attention.append(nn.ReLU())
 
     def forward(self, query, key, value):
+        query = query.cuda()
+        key = key.cuda()
+        value = value.cuda()
         for i in range(self.attention_layers):
             # cross attention layer
             query = self.cx_attention[i*3](query, key, value)[0] # 0th index is attn output, 1st index is attention weights

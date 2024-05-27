@@ -11,7 +11,7 @@ class ShortAnswerDecoder(nn.Module):
     def __init__(self, device):
         super(ShortAnswerDecoder, self).__init__()
         self.device = device
-        self.decoder = GPT2LMHeadModel.from_pretrained("openai-community/gpt2") #.cuda(device)
+        self.decoder = GPT2LMHeadModel.from_pretrained("openai-community/gpt2").cuda(device)
         self.decoder.resize_token_embeddings(50257+100)
     """
     Forward pass of the short answer model.
@@ -45,15 +45,11 @@ class ShortAnswerDecoder(nn.Module):
         # concatenate the long answer embeddings to the prompts and labels
         for i in range(batch_size):
             row = prompt_embeddings[i]
-            print(f"i: {i}")
-            print(indices)
-            print(f"index: {indices[i]}")
             if indices[i] == -1:
                 print("there is no long answer embedding space available")
             else:
                 # Replace the special token with the long answer embeddings
                 row[indices[i], :] = long_answer_embeddings[i]
-        print(labels)
         # obtain the loss from the decoder
         outputs = self.decoder.forward(inputs_embeds=prompt_embeddings, attention_mask=prompt_masks, labels=labels)
         return outputs.loss
@@ -67,6 +63,6 @@ if __name__ == "__main__":
     print(lae.shape)
     model = ShortAnswerDecoder(device)
     for batch in dl:
-        loss = model(lae, batch["prompts"], batch['prompt_mask'], batch["short_answers_labels"])
+        loss = model(lae.cuda(device), batch["prompts"].cuda(device), batch['prompt_mask'].cuda(device), batch["short_answers_labels"].cuda(device))
         print(f"loss={loss}")
         break

@@ -37,7 +37,7 @@ class QAModel(nn.Module):
     def forward(self, la_inputs, sa_inputs):
         # run the forward pass to the long answer retriever, and retrieve a long answer embedding
         qtokens, atokens, qmask, amask = la_inputs
-        la_logits, long_answer_embeddings = self.long_answer_model(qtokens, atokens, qmask, amask)
+        la_logits, long_answer_embeddings = self.long_answer_model(qtokens, qmask, atokens, amask)
 
         # run the forward pass of the short answer model
         prompts, prompt_mask, labels = sa_inputs

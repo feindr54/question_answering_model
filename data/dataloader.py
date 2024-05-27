@@ -36,13 +36,13 @@ class NQDataLoader(DataLoader):
             questions.append(row["question"])
             # correct long answer
             long_answers.append(row["correct_long_answer"])
-            label_row = torch.zeros(size=(batch_size, ), dtype=torch.int)
+            label_row = torch.zeros(size=(batch_size, ))
             label_row[index] += 1
             labels.append(label_row)
             # wrong long answer
             for wrong_answer in row["wrong_long_answers"]:
                 long_answers.append(wrong_answer)
-                labels.append(torch.zeros(size=(batch_size, ), dtype=torch.int))
+                labels.append(torch.zeros(size=(batch_size, )))
 
             short_answers_prompts.append(row["short_answer"])
 
@@ -59,7 +59,7 @@ class NQDataLoader(DataLoader):
         la_mask = la_output["attention_mask"]
 
         # tensorize the long answer labels
-        labels = torch.stack(labels, dim=0).to(torch.int)
+        labels = torch.stack(labels, dim=0)
 
         # tokenize the prompt
         prompt_output = self.gpt_tokenizer(prompts, padding=True, max_length=prompt_max_len, truncation=True, return_tensors="pt")

@@ -25,6 +25,6 @@ inf = float('inf')
 
 # embedding max lengths
 question_max_len = 24
-long_answer_max_len = 1000
-prompt_max_len = 1000
+long_answer_max_len = 512
+prompt_max_len = 512
 short_answer_max_len = 50

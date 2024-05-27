@@ -14,11 +14,11 @@ class LongAnswerModel(nn.Module):
         self.cross_attention = CrossAttentionModule(device)
         self.linear = nn.Linear(768,1, device=device) # input is batch * answers * 768
 
-    def forward(self, question, answer, question_mask, answer_mask):
+    def forward(self, question, question_mask, answer, answer_mask):
         # obtain bert embeddings of question and answer with attention mask
         # get the pooled output for the questions, and the unpooled output from the answers
-        q_embeds = self.qbert(question, question_mask).pooler_output.to(self.device) # (abatch) * qbatch x 768
-        a_embeds = self.abert(answer, answer_mask).last_hidden_state.to(self.device) # abatch x seqlen x 768
+        q_embeds = self.question_encoder(question.cuda(), question_mask.cuda()) # (abatch) * qbatch x 768
+        a_embeds = self.long_answer_encoder(answer.cuda(), answer_mask.cuda()) # abatch x seqlen x 768
 
         # extend the dimensions of the questions to the answer batch
         q_embeds = q_embeds.repeat(a_embeds.shape[0],1,1)
@@ -28,5 +28,19 @@ class LongAnswerModel(nn.Module):
         value = a_embeds
 
         embeddings = self.cross_attention(query, key, value)
-        logits = self.linear(embeddings)
+        logits = self.linear(embeddings).squeeze(-1)
         return logits, embeddings
+
+if __name__ == "__main__":
+    from data import NQDataset, NQDataLoader
+    from conf import device
+    from torch.nn import BCEWithLogitsLoss
+    ds = NQDataset()
+    dl = NQDataLoader(ds, batch_size=1)
+    model = LongAnswerModel(device)
+    criterion = BCEWithLogitsLoss()
+    for batch in dl:
+        logits, embeddings = model(batch["questions"], batch["question_mask"], batch["long_answers"], batch['long_answer_mask'])
+        loss = criterion(logits, batch["long_answers_labels"].cuda(device))
+        print(f"loss={loss}")
+        break
