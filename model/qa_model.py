@@ -36,11 +36,34 @@ class QAModel(nn.Module):
     """
     def forward(self, la_inputs, sa_inputs):
         # run the forward pass to the long answer retriever, and retrieve a long answer embedding
-        qtokens, atokens, qmask, amask = la_inputs
+        qtokens, qmask, atokens, amask = la_inputs
         la_logits, long_answer_embeddings = self.long_answer_model(qtokens, qmask, atokens, amask)
+        print(la_logits)
 
         # run the forward pass of the short answer model
         prompts, prompt_mask, labels = sa_inputs
         sa_loss = self.short_answer_model(long_answer_embeddings, prompts, prompt_mask, labels)
 
+        # print("print long answer logits after running decoder")
+        # print(la_logits)
+
         return la_logits, sa_loss
+
+if __name__ == "__main__":
+    from data import NQDataset, NQDataLoader
+    from torch.nn import BCELoss as BCEWithLogitsLoss
+    from conf import device
+    data = NQDataset()
+    dataloader = NQDataLoader(data, batch_size=2)
+    model = QAModel(device)
+    criterion = BCEWithLogitsLoss()
+    for batch in dataloader:
+        la_inputs = (batch["questions"], batch["question_mask"], batch["long_answers"], batch['long_answer_mask'])
+        sa_inputs = (batch["prompts"].cuda(device), batch['prompt_mask'].cuda(device), batch["short_answers_labels"].cuda(device))
+        la_logits, sa_loss = model(la_inputs, sa_inputs)
+        print(la_logits)
+        print(batch['long_answers_labels'])
+        la_loss = criterion(la_logits, batch['long_answers_labels'])
+        print(f"la_loss={la_loss}")
+        print(f"sa_loss={sa_loss}")
+        break
