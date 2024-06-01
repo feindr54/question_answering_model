@@ -36,18 +36,20 @@ class NQDataLoader(DataLoader):
             questions.append(row["question"])
             # correct long answer
             long_answers.append(row["correct_long_answer"])
-            label_row = torch.zeros(size=(batch_size, ))
+            label_row = torch.zeros(size=(batch_size, ), dtype=torch.int)
             label_row[index] += 1
             labels.append(label_row)
             # wrong long answer
             for wrong_answer in row["wrong_long_answers"]:
                 long_answers.append(wrong_answer)
-                labels.append(torch.zeros(size=(batch_size, )))
+                labels.append(torch.zeros(size=(batch_size, ), dtype=torch.int))
 
             short_answers_prompts.append(row["short_answer"])
 
             prompts.append(row["prompt"])
 
+            # increment the index
+            index += 1
         # tokenize the questions
         q_output = self.bert_tokenizer(questions, padding=True, max_length=question_max_len, truncation=True, return_tensors="pt")
         q_tokens = q_output["input_ids"]
@@ -59,7 +61,7 @@ class NQDataLoader(DataLoader):
         la_mask = la_output["attention_mask"]
 
         # tensorize the long answer labels
-        labels = torch.stack(labels, dim=0)
+        labels = torch.stack(labels, dim=0).to(torch.float)
 
         # tokenize the prompt
         prompt_output = self.gpt_tokenizer(prompts, padding=True, max_length=prompt_max_len, truncation=True, return_tensors="pt")
@@ -78,7 +80,9 @@ class NQDataLoader(DataLoader):
 
         # TODO - add a end token at the end of short answer tokens
         prompt_labels = torch.full_like(input=prompt_tokens, fill_value=-100)
-        sa_labels = sa_output["input_ids"] * sa_output["attention_mask"] + (~sa_output["attention_mask"] * -100) # sets label of any element with attention mask 0 to -100
+        # sa_labels = sa_output["input_ids"] * sa_output["attention_mask"] + (~sa_output["attention_mask"] * -100) # sets label of any element with attention mask 0 to -100
+        sa_labels = torch.where(sa_output["attention_mask"] == 1, sa_output["input_ids"], -100)
+        print(f"sa label min={sa_labels.min()}, sa label max={sa_labels.max()}")
         prompt_labels = torch.cat((prompt_labels, filler_tokens, sa_labels), dim=1)
 
         # checks that the labels and the tokens have the same shape
@@ -86,6 +90,15 @@ class NQDataLoader(DataLoader):
             print(f"tokens:{output_prompt_tokens.shape}")
             print(f"labels:{prompt_labels.shape}")
 
+        # TODO - the dimensions of each tensor
+        # qtokens: qbatch x q_seq_len
+        # question_mask : qbatch x q_seq_len
+        # la_tokens: (long answer batch) x long_answer_seq_len
+        # la_mask : (long answer batch) x long_answer_seq_len
+        # labels: (long answer batch) x qbatch
+        # output_prompt_tokens: qbatch x prompt_seqlen
+        # output_prompt_mask: qbatch x prompt_seqlen
+        # prompt_labels: qbatch x prompt_seqlen
         return {"questions": q_tokens, "question_mask": q_mask, "long_answers": la_tokens, "long_answer_mask": la_mask,
                 "long_answers_labels": labels, "prompts": output_prompt_tokens, "prompt_mask": output_prompt_mask, "short_answers_labels": prompt_labels}
 

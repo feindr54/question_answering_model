@@ -43,8 +43,8 @@ class NQDataset(Dataset):
         wrong1 = correct_index
         wrong2 = correct_index
         while (wrong1 == correct_index or wrong2 == correct_index):
-            wrong1 = np.random.randint(0, len(candidates["top_level"]))
-            wrong2 = np.random.randint(0, len(candidates["top_level"]))
+            wrong1 = np.random.randint(0, len(candidates))
+            wrong2 = np.random.randint(0, len(candidates))
 
         wrong_answer1 = self.get_string_tokens(wrong1, candidates, doc)
         wrong_answer2 = self.get_string_tokens(wrong2, candidates, doc)
