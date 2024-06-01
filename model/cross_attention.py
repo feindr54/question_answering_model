@@ -26,8 +26,8 @@ if __name__ == "__main__":
     import torch
     from conf import device
     cross_attention = CrossAttentionModule(device)
-    query = torch.randint(size=(10, 30), low=0, high=20000)
-    key = torch.randint(size=(10, 30), low=0, high=20000)
+    query = torch.randint(size=(10, 768), low=0, high=20000).float()
+    key = torch.randint(size=(10,768), low=0, high=20000).float()
     value = key
     embeddings = cross_attention(query, key, value)
     print(embeddings.shape)
