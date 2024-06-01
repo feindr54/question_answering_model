@@ -57,7 +57,8 @@ class NQDataset(Dataset):
         s_a_prompt: str = ""
         for short_answer in short_answer_annotations:
             s_a_prompt += short_answer["text"][0] + ","
-        s_a_prompt = s_a_prompt[:-1]
+        s_a_prompt = s_a_prompt[:-1] # remove that last comma
+        s_a_prompt += "<|endoftext|>" # add the end of sentence token
 
         # generate the prompt
         prompt = "Question: " + question + " [PAD]Answers: " + correct_long_answer + "[PAD][LA_SEP][PAD]Short answer: " # + tokenier_pad_token + short answer + right paddings
