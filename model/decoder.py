@@ -35,17 +35,11 @@ class ShortAnswerDecoder(nn.Module):
         # sets any non-matches to -1
         indices[~matches.any(dim=1)] = -1
 
-        print(indices)
-
         batch_size = len(prompts)
 
         # convert the input ids to input embeddings
         with torch.no_grad():
             prompt_embeddings = self.decoder.transformer.wte(prompts)
-
-        print(long_answer_embeddings.shape)
-        print(prompt_embeddings.shape)
-
 
         # concatenate the long answer embeddings to the prompts and labels
         for i in range(batch_size):
@@ -54,15 +48,10 @@ class ShortAnswerDecoder(nn.Module):
                 print("there is no long answer embedding space available")
             else:
                 # Replace the special token with the long answer embeddings
-                print(row[indices[i]].shape)
-                print(long_answer_embeddings[3*i, i].shape)
+                # print(row[indices[i]].shape)
+                # print(long_answer_embeddings[3*i, i].shape)
                 row[indices[i], :] = long_answer_embeddings[3*i, i] # prompt_embeddings qbatch x seqlen x 768 , long answer embedding abatch x qbatch x 768
         # obtain the loss from the decoder
-        print("prompt_embedding shape: ", prompt_embeddings.shape)
-        print("prompt mask shape: ", prompt_masks.shape)
-        print("label shape: ", labels.shape)
-        print(f"label_min={labels.min()}, label_max={labels.max()}")
-        print(f"model shape={self.decoder}")
         outputs = self.decoder.forward(inputs_embeds=prompt_embeddings, attention_mask=prompt_masks, labels=labels)
         return outputs.loss
 
