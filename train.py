@@ -141,6 +141,7 @@ from utils.epoch_time import epoch_time
 #     def generate(self):
 #         pass
 
+# TODO: move this part to run
 model = QAModel(device).cuda(device=device)
 
 train_dataset = NQDataset()
@@ -156,6 +157,8 @@ scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer=optimizer,
                                                  verbose=True,
                                                  factor=factor,
                                                  patience=patience)
+
+# TODO: you can also use Asymmetric Loss here: https://github.com/Alibaba-MIIL/ASL/blob/main/src/loss_functions/losses.py
 criterion = nn.BCEWithLogitsLoss()
 
 def train(model, optimizer, criterion):
@@ -196,12 +199,15 @@ def train(model, optimizer, criterion):
         print('step :', i, ', sa_loss :', sa_loss.item())
     return epoch_la_loss / data_num, epoch_sa_loss / data_num, epoch_loss / data_num
 
+# TODO: use torch.no_grad decorator
+# @torch.no_grad()
 def evaluate(model, criterion):
     model.eval()
     epoch_la_loss = 0
     epoch_sa_loss = 0
     epoch_loss = 0
     data_num = 0
+    # TODO: can use a much bigger batch size in validation
     val_dataloader = Dataloader(batch_size=batch_size, mode="valid")
     with torch.no_grad():
         for i, batch in enumerate(val_dataloader):
@@ -234,6 +240,14 @@ def run(total_epoch, best_loss):
     train_sa_losses, test_sa_losses = [], []
     train_losses, test_losses = [], []
     for step in range(total_epoch):
+        # TODO: pre-train with the first epoch (
+        # if i == 0:
+        #   for p in model.long_answer_model.question_encoder.parameters():
+        #       p.requires_grad = False
+        #   # do the same thing for long answer encoder and decoder
+        # else:
+        #   for p in model.parameters():
+        #       p.requires_grad = True
         # train and evaluate model
         start_time = time.time()
         train_la_loss, train_sa_loss, train_loss = train(model, optimizer, criterion)
