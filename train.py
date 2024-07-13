@@ -143,9 +143,10 @@ from utils.epoch_time import epoch_time
 
 model = QAModel(device).cuda(device=device)
 
-train_dataset = NQDataset()
+train_dataset = NQDataset(train=True)
+val_dataset = NQDataset(train=False)
 train_dataloader = NQDataLoader(train_dataset, batch_size=batch_size, mode="train")
-val_dataloader = NQDataLoader(batch_size=batch_size, mode="valid")
+val_dataloader = NQDataLoader(val_dataset, batch_size=batch_size, mode="valid")
 
 optimizer = Adam(params=model.parameters(),
                  lr=init_lr,
@@ -165,16 +166,17 @@ def train(model, optimizer, criterion):
     epoch_sa_loss = 0
     epoch_loss = 0
     data_num = 0
+    print(len(train_dataloader))
     for i, batch in enumerate(train_dataloader):
         questions = batch['questions'].to(device)
         question_mask = batch['question_mask'].to(device)
         answers = batch['long_answers'].to(device)
         answer_mask = batch['long_answer_mask'].to(device)
-        long_answer_labels = batch['long_answer_labels'].float().to(device)
+        long_answer_labels = batch['long_answers_labels'].float().to(device)
 
         prompts = batch['prompts'].to(device)
         prompt_mask = batch['prompt_mask'].to(device)
-        prompt_labels = batch['short_answer_labels'].to(device)
+        prompt_labels = batch['short_answers_labels'].to(device)
 
         la_inputs = (questions, answers, question_mask, answer_mask)
         sa_inputs = (prompts, prompt_mask, prompt_labels)
@@ -194,6 +196,7 @@ def train(model, optimizer, criterion):
         print('step :', i, ', loss :', loss.item())
         print('step :', i, ', la_loss :', la_loss.item())
         print('step :', i, ', sa_loss :', sa_loss.item())
+    print("end train")
     return epoch_la_loss / data_num, epoch_sa_loss / data_num, epoch_loss / data_num
 
 def evaluate(model, criterion):
@@ -202,30 +205,36 @@ def evaluate(model, criterion):
     epoch_sa_loss = 0
     epoch_loss = 0
     data_num = 0
-    val_dataloader = Dataloader(batch_size=batch_size, mode="valid")
+
+    print("start eval")
     with torch.no_grad():
         for i, batch in enumerate(val_dataloader):
             # obtain the embedding for the question and answers
             questions = batch['questions'].to(device)
             question_mask = batch['question_mask'].to(device)
             answers = batch['long_answers'].to(device)
-            answer_mask = batch['answer_mask'].to(device)
-            long_answer_labels = batch['long_answer_labels'].float().to(device)
+            answer_mask = batch['long_answer_mask'].to(device)
+            long_answer_labels = batch['long_answers_labels'].float().to(device)
 
             prompts = batch['prompts'].to(device)
             prompt_mask = batch['prompt_mask'].to(device)
-            prompt_labels = batch['short_answer_labels'].to(device)
+            prompt_labels = batch['short_answers_labels'].to(device)
 
             la_inputs = (questions, answers, question_mask, answer_mask)
             sa_inputs = (answers, answer_mask, prompts, prompt_mask, prompt_labels)
             # run the model on the question and answers
             la_logits, sa_loss = model(la_inputs, sa_inputs)
-            loss = criterion(la_logits, long_answer_labels)
+            la_loss = criterion(la_logits, long_answer_labels)
+            loss = la_loss + sa_loss
 
-            epoch_la_loss += loss.item()
+            epoch_la_loss += la_loss.item()
             epoch_sa_loss += sa_loss.item()
             epoch_loss += loss.item()
             data_num += questions.shape[0]
+
+            print('step :', i, ', loss :', loss.item())
+            print('step :', i, ', la_loss :', la_loss.item())
+            print('step :', i, ', sa_loss :', sa_loss.item())
     return epoch_la_loss / data_num, epoch_sa_loss / data_num, epoch_loss / data_num
 
 def run(total_epoch, best_loss):
@@ -267,40 +276,5 @@ def run(total_epoch, best_loss):
         print(f'\tTrain Loss: {train_la_loss:.3f} | Train PPL: {math.exp(train_la_loss):7.3f}')
         print(f'\tVal Loss: {valid_la_loss:.3f} |  Val PPL: {math.exp(valid_la_loss):7.3f}')
 
-# def decoder_run(total_epoch, best_loss):
-#     import math
-#     train_losses, test_losses = [], []
-#     for step in range(total_epoch):
-#         # train and evaluate model
-#         start_time = time.time()
-#         train_loss = decoder_train(optimizer, criterion)
-#         # valid_loss = evaluate(model, criterion)
-#         end_time = time.time()
-
-#         train_losses.append(train_loss)
-#         # test_losses.append(valid_loss)
-
-#         # time the process
-#         epoch_mins, epoch_secs = epoch_time(start_time, end_time)
-
-#         # saves the model with the best loss
-#         # if valid_loss < best_loss:
-#         #     best_loss = valid_loss
-#         #     torch.save(model.state_dict(), 'saved/model-{0}.pt'.format(valid_loss))
-#         if train_loss < best_loss:
-#             best_loss = train_loss
-#             torch.save(model.state_dict(), 'saved/model-{0}.pt'.format(train_loss))
-
-#         f = open('result/train_loss.txt', 'w')
-#         f.write(str(train_losses))
-#         f.close()
-
-#         # f = open('result/test_loss.txt', 'w')
-#         # f.write(str(test_losses))
-#         # f.close()
-
-#         print(f'Epoch: {step + 1} | Time: {epoch_mins}m {epoch_secs}s')
-#         print(f'\tTrain Loss: {train_loss:.3f} | Train PPL: {math.exp(train_loss):7.3f}')
-#         # print(f'\tVal Loss: {valid_loss:.3f} |  Val PPL: {math.exp(valid_loss):7.3f}')
 if __name__ == "__main__":
     run(total_epoch=epoch, best_loss=inf)

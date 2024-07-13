@@ -33,12 +33,23 @@ class NQDataLoader(DataLoader):
         batch_size = len(batch)
         index = 0
         for row in batch:
+            if row["wrong_long_answers"] is None:
+                continue
+
             questions.append(row["question"])
             # correct long answer
-            long_answers.append(row["correct_long_answer"])
-            label_row = torch.zeros(size=(batch_size, ), dtype=torch.int)
-            label_row[index] += 1
-            labels.append(label_row)
+
+            # check if there exists a correct long answer
+            if row["correct_long_answer"] is None:
+                # no correct long answer, set label row to 0
+                long_answers.append("")
+                labels.append(torch.zeros(size=(batch_size, ), dtype=torch.int))
+            else:
+                # correct long answer, set label row to 1
+                long_answers.append(row["correct_long_answer"])
+                label_row = torch.zeros(size=(batch_size, ), dtype=torch.int)
+                label_row[index] += 1
+                labels.append(label_row)
             # wrong long answer
             for wrong_answer in row["wrong_long_answers"]:
                 long_answers.append(wrong_answer)
@@ -80,17 +91,18 @@ class NQDataLoader(DataLoader):
 
         # TODO - add a end token at the end of short answer tokens
         prompt_labels = torch.full_like(input=prompt_tokens, fill_value=-100)
+        filler_labels = torch.full_like(input=filler_tokens, fill_value=-100)
         # sa_labels = sa_output["input_ids"] * sa_output["attention_mask"] + (~sa_output["attention_mask"] * -100) # sets label of any element with attention mask 0 to -100
         sa_labels = torch.where(sa_output["attention_mask"] == 1, sa_output["input_ids"], -100)
-        print(f"sa label min={sa_labels.min()}, sa label max={sa_labels.max()}")
-        prompt_labels = torch.cat((prompt_labels, filler_tokens, sa_labels), dim=1)
+        # print(f"sa label min={sa_labels.min()}, sa label max={sa_labels.max()}")
+        prompt_labels = torch.cat((prompt_labels, filler_labels, sa_labels), dim=1)
 
         # checks that the labels and the tokens have the same shape
         if (prompt_labels.shape != output_prompt_tokens.shape):
             print(f"tokens:{output_prompt_tokens.shape}")
             print(f"labels:{prompt_labels.shape}")
 
-        # TODO - the dimensions of each tensor
+        # the dimensions of each tensor
         # qtokens: qbatch x q_seq_len
         # question_mask : qbatch x q_seq_len
         # la_tokens: (long answer batch) x long_answer_seq_len
@@ -111,8 +123,9 @@ class NQDataLoader(DataLoader):
 
 if __name__ ==  "__main__":
     from .dataset import NQDataset
+    torch.set_printoptions(profile="full")
     ds = NQDataset()
-    dl = NQDataLoader(ds, 2)
+    dl = NQDataLoader(ds, 8)
     for batch in dl:
         print(f"questions={batch['questions'].shape}")
         print(f"question_mask={batch['question_mask'].shape}")
@@ -121,6 +134,6 @@ if __name__ ==  "__main__":
         print(f"labels={batch['long_answers_labels'].shape}")
         print(f"prompts={batch['prompts'].shape}")
         print(f"prompt_mask={batch['prompt_mask'].shape}")
-        # print(f"prompt_labels={batch['prompt_labels'].shape}")
         print(f"short_answers_labels={batch['short_answers_labels'].shape}")
+        print("prompt labels: ", batch['short_answers_labels'])
         break

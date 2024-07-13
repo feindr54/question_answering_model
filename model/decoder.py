@@ -13,7 +13,6 @@ class ShortAnswerDecoder(nn.Module):
         self.device = device
         self.decoder = GPT2LMHeadModel.from_pretrained("openai-community/gpt2").cuda(device)
         self.decoder.resize_token_embeddings(50257+2)
-        print(self.decoder)
     """
     Forward pass of the short answer model.
 
@@ -35,7 +34,14 @@ class ShortAnswerDecoder(nn.Module):
         # sets any non-matches to -1
         indices[~matches.any(dim=1)] = -1
 
+        # convert prompt tokens to longs?
+        prompts = prompts.to(torch.int64)
+        prompt_masks = prompt_masks.to(torch.int64)
+        labels = labels.to(torch.int64)
+
         batch_size = len(prompts)
+
+        print(f"prompts shape={prompts.shape}")
 
         # convert the input ids to input embeddings
         with torch.no_grad():

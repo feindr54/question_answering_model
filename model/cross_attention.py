@@ -7,7 +7,7 @@ class CrossAttentionModule(nn.Module):
         self.attention_layers = attention_layers
 
         for _ in range(self.attention_layers):
-            self.cx_attention.append(nn.MultiheadAttention(768, 2, batch_first=True, device=device))
+            self.cx_attention.append(nn.MultiheadAttention(768, 8, batch_first=True, device=device))
             self.cx_attention.append(nn.Linear(in_features=768, out_features=768, device=device))
             self.cx_attention.append(nn.ReLU())
 
